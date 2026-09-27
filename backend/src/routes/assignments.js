@@ -1,11 +1,11 @@
 const express = require('express');
 const db = require('../db/database');
-const { verifyToken, requireRoles } = require('../middleware/authMiddleware');
+const { verifyToken, requirePermission, logAudit } = require('../middleware/authMiddleware');
 
 const router = express.Router();
 
-// GET /api/assignments - List assignments
-router.get('/', verifyToken, (req, res) => {
+// GET /api/assignments - List assignments with role-based scoping
+router.get('/', verifyToken, requirePermission('assignments', 'read'), (req, res) => {
   const { subjectId, semester } = req.query;
 
   let query = `
@@ -29,16 +29,18 @@ router.get('/', verifyToken, (req, res) => {
     params.push(Number(semester));
   }
 
-  query += ' ORDER BY a.due_date ASC';
-
-  const assignments = db.prepare(query).all(...params);
-
   // If student is logged in, attach their submission status
   let studentId = null;
   if (req.user.role === 'student') {
-    const st = db.prepare('SELECT id FROM students WHERE user_id = ?').get(req.user.id);
-    studentId = st ? st.id : null;
+    studentId = req.student ? req.student.id : null;
+  } else if (req.user.role === 'parent') {
+    const firstWard = db.prepare('SELECT student_id FROM ward_links WHERE parent_user_id = ? ORDER BY is_primary DESC LIMIT 1').get(req.user.id);
+    studentId = firstWard ? firstWard.student_id : null;
   }
+
+  query += ' ORDER BY a.due_date ASC';
+
+  const assignments = db.prepare(query).all(...params);
 
   const result = assignments.map(a => {
     let mySubmission = null;
@@ -57,14 +59,26 @@ router.get('/', verifyToken, (req, res) => {
   res.json(result);
 });
 
-// POST /api/assignments - Create new assignment (Faculty only)
-router.post('/', verifyToken, requireRoles('faculty', 'admin'), (req, res) => {
+// POST /api/assignments - Create new assignment (Faculty & Admin)
+router.post('/', verifyToken, requirePermission('assignments', 'create'), (req, res) => {
   const { subjectId, title, description, maxMarks, dueDate, attachmentUrl } = req.body;
 
   let facultyId = null;
   if (req.user.role === 'faculty') {
-    const fac = db.prepare('SELECT id FROM faculty WHERE user_id = ?').get(req.user.id);
-    facultyId = fac ? fac.id : 1;
+    if (!req.faculty) return res.status(403).json({ error: 'Faculty profile not found' });
+    facultyId = req.faculty.id;
+
+    // DB SCOPING: Verify faculty is assigned to this subject
+    const isMapped = db.prepare(`
+      SELECT 1 FROM faculty_class_map 
+      WHERE faculty_id = ? AND subject_id = ?
+    `).get(facultyId, subjectId);
+
+    if (!isMapped) {
+      return res.status(403).json({
+        error: 'Forbidden: You are not assigned to create assignments for this subject.'
+      });
+    }
   } else {
     facultyId = req.body.facultyId || 1;
   }
@@ -85,13 +99,29 @@ router.post('/', verifyToken, requireRoles('faculty', 'admin'), (req, res) => {
   }
 });
 
+// DELETE /api/assignments/:id - Delete assignment
+router.delete('/:id', verifyToken, requirePermission('assignments', 'delete'), (req, res) => {
+  const assignment = db.prepare('SELECT * FROM assignments WHERE id = ?').get(req.params.id);
+  if (!assignment) {
+    return res.status(404).json({ error: 'Assignment not found' });
+  }
+
+  if (req.user.role === 'faculty' && assignment.faculty_id !== req.faculty?.id) {
+    return res.status(403).json({ error: 'Forbidden: You can only delete your own assignments.' });
+  }
+
+  db.prepare('DELETE FROM assignments WHERE id = ?').run(req.params.id);
+  res.json({ message: 'Assignment deleted successfully' });
+});
+
 // POST /api/assignments/:id/submit - Student submits assignment
-router.post('/:id/submit', verifyToken, requireRoles('student'), (req, res) => {
+router.post('/:id/submit', verifyToken, requirePermission('assignments', 'submit'), (req, res) => {
   const { submissionText, fileUrl } = req.body;
   const assignmentId = req.params.id;
 
-  const student = db.prepare('SELECT id FROM students WHERE user_id = ?').get(req.user.id);
-  if (!student) return res.status(404).json({ error: 'Student record not found' });
+  if (!req.student) {
+    return res.status(404).json({ error: 'Student profile not found' });
+  }
 
   const assignment = db.prepare('SELECT * FROM assignments WHERE id = ?').get(assignmentId);
   if (!assignment) return res.status(404).json({ error: 'Assignment not found' });
@@ -109,7 +139,7 @@ router.post('/:id/submit', verifyToken, requireRoles('student'), (req, res) => {
         file_url = excluded.file_url,
         submitted_at = CURRENT_TIMESTAMP,
         status = excluded.status
-    `).run(assignmentId, student.id, submissionText || 'Online Submission', fileUrl || null, status);
+    `).run(assignmentId, req.student.id, submissionText || 'Online Submission', fileUrl || null, status);
 
     res.json({ message: 'Assignment submitted successfully', status });
   } catch (err) {
@@ -117,8 +147,15 @@ router.post('/:id/submit', verifyToken, requireRoles('student'), (req, res) => {
   }
 });
 
-// GET /api/assignments/:id/submissions - View all submissions for an assignment (Faculty)
-router.get('/:id/submissions', verifyToken, requireRoles('faculty', 'admin'), (req, res) => {
+// GET /api/assignments/:id/submissions - View submissions (Faculty & Admin)
+router.get('/:id/submissions', verifyToken, requirePermission('assignments', 'grade'), (req, res) => {
+  const assignment = db.prepare('SELECT * FROM assignments WHERE id = ?').get(req.params.id);
+  if (!assignment) return res.status(404).json({ error: 'Assignment not found' });
+
+  if (req.user.role === 'faculty' && assignment.faculty_id !== req.faculty?.id) {
+    return res.status(403).json({ error: 'Forbidden: You can only view submissions for your own assignments.' });
+  }
+
   const submissions = db.prepare(`
     SELECT sub.*, s.roll_no, s.enrollment_no, u.full_name as student_name
     FROM assignment_submissions sub
@@ -132,11 +169,24 @@ router.get('/:id/submissions', verifyToken, requireRoles('faculty', 'admin'), (r
 });
 
 // POST /api/assignments/grade - Grade a student's submission
-router.post('/grade', verifyToken, requireRoles('faculty', 'admin'), (req, res) => {
+router.post('/grade', verifyToken, requirePermission('assignments', 'grade'), (req, res) => {
   const { submissionId, marksObtained, feedback } = req.body;
 
   if (!submissionId || marksObtained === undefined) {
     return res.status(400).json({ error: 'Submission ID and marks obtained are required' });
+  }
+
+  const sub = db.prepare(`
+    SELECT sub.*, a.faculty_id, a.max_marks
+    FROM assignment_submissions sub
+    JOIN assignments a ON sub.assignment_id = a.id
+    WHERE sub.id = ?
+  `).get(submissionId);
+
+  if (!sub) return res.status(404).json({ error: 'Submission not found' });
+
+  if (req.user.role === 'faculty' && sub.faculty_id !== req.faculty?.id) {
+    return res.status(403).json({ error: 'Forbidden: You can only grade submissions for your own assignments.' });
   }
 
   db.prepare(`
@@ -151,7 +201,7 @@ router.post('/grade', verifyToken, requireRoles('faculty', 'admin'), (req, res) 
 });
 
 // GET /api/assignments/study-materials - Notes and lecture slides
-router.get('/study-materials', verifyToken, (req, res) => {
+router.get('/study-materials', verifyToken, requirePermission('assignments', 'read'), (req, res) => {
   const { subjectId } = req.query;
   let query = `
     SELECT sm.*, sub.code as subject_code, sub.name as subject_name,
@@ -175,14 +225,23 @@ router.get('/study-materials', verifyToken, (req, res) => {
   res.json(materials);
 });
 
-// POST /api/assignments/study-materials - Upload note
-router.post('/study-materials', verifyToken, requireRoles('faculty', 'admin'), (req, res) => {
+// POST /api/assignments/study-materials - Upload note (Faculty & Admin)
+router.post('/study-materials', verifyToken, requirePermission('assignments', 'create'), (req, res) => {
   const { subjectId, title, unitName, fileType, fileUrl, fileSize } = req.body;
 
   let facultyId = null;
   if (req.user.role === 'faculty') {
-    const fac = db.prepare('SELECT id FROM faculty WHERE user_id = ?').get(req.user.id);
-    facultyId = fac ? fac.id : 1;
+    if (!req.faculty) return res.status(403).json({ error: 'Faculty profile not found' });
+    facultyId = req.faculty.id;
+
+    const isMapped = db.prepare(`
+      SELECT 1 FROM faculty_class_map 
+      WHERE faculty_id = ? AND subject_id = ?
+    `).get(facultyId, subjectId);
+
+    if (!isMapped) {
+      return res.status(403).json({ error: 'Forbidden: You are not assigned to upload materials for this subject.' });
+    }
   } else {
     facultyId = req.body.facultyId || 1;
   }

@@ -1,12 +1,12 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const db = require('../db/database');
-const { verifyToken, requireRoles } = require('../middleware/authMiddleware');
+const { verifyToken, requirePermission, logAudit } = require('../middleware/authMiddleware');
 
 const router = express.Router();
 
-// GET /api/students - List students with search and filter
-router.get('/', verifyToken, (req, res) => {
+// GET /api/students - List students with DB-level scoping and filters
+router.get('/', verifyToken, requirePermission('students', 'read'), (req, res) => {
   const { search, semester, section, status } = req.query;
 
   let query = `
@@ -20,6 +20,25 @@ router.get('/', verifyToken, (req, res) => {
     WHERE 1=1
   `;
   const params = [];
+
+  // DB-LEVEL SCOPING BASED ON USER ROLE
+  if (req.user.role === 'student') {
+    // Students can ONLY view their own record
+    query += ` AND s.user_id = ?`;
+    params.push(req.user.id);
+  } else if (req.user.role === 'parent') {
+    // Parents can ONLY view their linked wards
+    query += ` AND s.id IN (SELECT student_id FROM ward_links WHERE parent_user_id = ?)`;
+    params.push(req.user.id);
+  } else if (req.user.role === 'faculty') {
+    // Faculty can ONLY view students in their assigned sections from faculty_class_map
+    const facId = req.faculty ? req.faculty.id : 0;
+    query += ` AND (s.semester, s.section) IN (
+      SELECT semester, section FROM faculty_class_map WHERE faculty_id = ?
+    )`;
+    params.push(facId);
+  }
+  // Admin sees all without scoping restriction
 
   if (search) {
     query += ` AND (u.full_name LIKE ? OR s.roll_no LIKE ? OR s.enrollment_no LIKE ? OR u.email LIKE ?)`;
@@ -71,8 +90,33 @@ router.get('/', verifyToken, (req, res) => {
   res.json(studentsWithStats);
 });
 
-// GET /api/students/:id - Detailed profile
-router.get('/:id', verifyToken, (req, res) => {
+// GET /api/students/:id - Detailed profile with DB scoping validation
+router.get('/:id', verifyToken, requirePermission('students', 'read'), (req, res) => {
+  const targetId = Number(req.params.id);
+
+  // DB scoping check for Student & Parent roles
+  if (req.user.role === 'student') {
+    if (!req.student || req.student.id !== targetId) {
+      return res.status(403).json({ error: 'Access denied: Students can only view their own academic dossier.' });
+    }
+  } else if (req.user.role === 'parent') {
+    const isLinkedWard = db.prepare('SELECT 1 FROM ward_links WHERE parent_user_id = ? AND student_id = ?').get(req.user.id, targetId);
+    if (!isLinkedWard) {
+      return res.status(403).json({ error: 'Access denied: You can only view dossiers of your own linked wards.' });
+    }
+  } else if (req.user.role === 'faculty') {
+    const targetStudent = db.prepare('SELECT semester, section FROM students WHERE id = ?').get(targetId);
+    if (targetStudent) {
+      const isAssigned = db.prepare(`
+        SELECT 1 FROM faculty_class_map 
+        WHERE faculty_id = ? AND semester = ? AND section = ?
+      `).get(req.faculty?.id, targetStudent.semester, targetStudent.section);
+      if (!isAssigned) {
+        return res.status(403).json({ error: 'Access denied: Student is not in your assigned teaching sections.' });
+      }
+    }
+  }
+
   const student = db.prepare(`
     SELECT s.*, u.full_name, u.email, u.phone, u.avatar_url,
            c.name as course_name, c.code as course_code,
@@ -84,7 +128,7 @@ router.get('/:id', verifyToken, (req, res) => {
     JOIN departments d ON s.department_id = d.id
     LEFT JOIN users p ON s.parent_user_id = p.id
     WHERE s.id = ?
-  `).get(req.params.id);
+  `).get(targetId);
 
   if (!student) {
     return res.status(404).json({ error: 'Student not found' });
@@ -102,20 +146,20 @@ router.get('/:id', verifyToken, (req, res) => {
   `).get(student.id);
 
   const total = attStats.total_sessions || 0;
-  const attended = (attStats.present_count || 0) + (attStats.late_count ? attStats.late_count * 0.5 : 0);
+  const attended = (attStats.present_count || 0) + ((attStats.late_count || 0) * 0.5);
   const attendancePct = total > 0 ? Number(((attended / total) * 100).toFixed(1)) : 100.0;
 
-  // Fee records
+  // Fees status
   const fees = db.prepare(`
-    SELECT sfp.*, fs.semester, fs.academic_year, fs.due_date, fs.total_amount as original_fee
+    SELECT sfp.*, fs.total_amount, fs.academic_year, fs.due_date
     FROM student_fee_payments sfp
     JOIN fee_structures fs ON sfp.fee_structure_id = fs.id
     WHERE sfp.student_id = ?
   `).all(student.id);
 
-  // Subject-wise marks
+  // Recent marks
   const marks = db.prepare(`
-    SELECT em.*, sub.code as subject_code, sub.name as subject_name, sub.credits,
+    SELECT em.*, sub.name as subject_name, sub.code as subject_code, sub.credits,
            ex.name as exam_name, ex.exam_type
     FROM exam_marks em
     JOIN subjects sub ON em.subject_id = sub.id
@@ -138,8 +182,8 @@ router.get('/:id', verifyToken, (req, res) => {
   });
 });
 
-// POST /api/students - Register/Admit new student (Admin & Faculty)
-router.post('/', verifyToken, requireRoles('admin', 'faculty'), (req, res) => {
+// POST /api/students - Register/Admit new student (Admin only)
+router.post('/', verifyToken, requirePermission('students', 'create'), (req, res) => {
   const {
     fullName, email, phone, rollNo, enrollmentNo,
     courseId, departmentId, semester, section,
@@ -152,7 +196,6 @@ router.post('/', verifyToken, requireRoles('admin', 'faculty'), (req, res) => {
     return res.status(400).json({ error: 'Full name, email, roll number, and enrollment number are required' });
   }
 
-  // Create user record
   const salt = bcrypt.genSaltSync(10);
   const userPassword = password && password.trim() ? password.trim() : 'student123';
   const defaultPass = bcrypt.hashSync(userPassword, salt);
@@ -192,6 +235,20 @@ router.post('/', verifyToken, requireRoles('admin', 'faculty'), (req, res) => {
       parentPhone || phone || ''
     );
 
+    // Audit Log for new admission
+    logAudit({
+      userId: req.user.id,
+      userRole: req.user.role,
+      userEmail: req.user.email,
+      action: 'STUDENT_ADMISSION',
+      entityType: 'students',
+      entityId: studentResult.lastInsertRowid,
+      oldValue: null,
+      newValue: { fullName, email, rollNo, enrollmentNo, semester, section },
+      reason: 'New student admission registration',
+      ipAddress: req.ip
+    });
+
     res.status(201).json({
       message: 'Student admitted successfully',
       studentId: studentResult.lastInsertRowid,
@@ -208,8 +265,8 @@ router.post('/', verifyToken, requireRoles('admin', 'faculty'), (req, res) => {
   }
 });
 
-// POST /api/students/batch - Bulk register multiple students from a class list
-router.post('/batch', verifyToken, requireRoles('admin', 'faculty'), (req, res) => {
+// POST /api/students/batch - Bulk register multiple students (Admin only)
+router.post('/batch', verifyToken, requirePermission('students', 'create'), (req, res) => {
   const { studentsList } = req.body;
   if (!Array.isArray(studentsList) || studentsList.length === 0) {
     return res.status(400).json({ error: 'Please provide a valid array of student records.' });
@@ -235,7 +292,7 @@ router.post('/batch', verifyToken, requireRoles('admin', 'faculty'), (req, res) 
 
   for (const st of studentsList) {
     if (!st.fullName || !st.email || !st.rollNo || !st.enrollmentNo) {
-      errors.push(`Skipped "${st.fullName || 'Unknown'}": Missing required fields (Name, Email, Roll, or Enrollment).`);
+      errors.push(`Skipped "${st.fullName || 'Unknown'}": Missing required fields.`);
       continue;
     }
 
@@ -270,6 +327,19 @@ router.post('/batch', verifyToken, requireRoles('admin', 'faculty'), (req, res) 
     }
   }
 
+  logAudit({
+    userId: req.user.id,
+    userRole: req.user.role,
+    userEmail: req.user.email,
+    action: 'STUDENTS_BATCH_ADMISSION',
+    entityType: 'students',
+    entityId: `${successCount}_records`,
+    oldValue: null,
+    newValue: { count: successCount, errors },
+    reason: 'Batch class roster admission import',
+    ipAddress: req.ip
+  });
+
   res.json({
     message: `Batch processed: Successfully registered ${successCount} student(s).`,
     successCount,
@@ -277,10 +347,16 @@ router.post('/batch', verifyToken, requireRoles('admin', 'faculty'), (req, res) 
   });
 });
 
-// PUT /api/students/:id - Update student record
-router.put('/:id', verifyToken, requireRoles('admin', 'faculty'), (req, res) => {
-  const { fullName, phone, semester, section, currentCgpa, status, address, parentName, parentPhone } = req.body;
-  const student = db.prepare('SELECT user_id FROM students WHERE id = ?').get(req.params.id);
+// PUT /api/students/:id - Update student record (Admin only with audit log)
+router.put('/:id', verifyToken, requirePermission('students', 'update'), (req, res) => {
+  const { fullName, phone, semester, section, currentCgpa, status, address, parentName, parentPhone, reason } = req.body;
+  const student = db.prepare(`
+    SELECT s.*, u.full_name, u.phone, u.email
+    FROM students s
+    JOIN users u ON s.user_id = u.id
+    WHERE s.id = ?
+  `).get(req.params.id);
+
   if (!student) {
     return res.status(404).json({ error: 'Student not found' });
   }
@@ -306,15 +382,54 @@ router.put('/:id', verifyToken, requireRoles('admin', 'faculty'), (req, res) => 
     WHERE id = ?
   `).run(semester, section, currentCgpa, status, address, parentName, parentPhone, req.params.id);
 
+  logAudit({
+    userId: req.user.id,
+    userRole: req.user.role,
+    userEmail: req.user.email,
+    action: 'STUDENT_RECORD_UPDATE',
+    entityType: 'students',
+    entityId: req.params.id,
+    oldValue: {
+      fullName: student.full_name,
+      phone: student.phone,
+      semester: student.semester,
+      section: student.section,
+      currentCgpa: student.current_cgpa,
+      status: student.status
+    },
+    newValue: { fullName, phone, semester, section, currentCgpa, status },
+    reason: reason || 'Academic administration update',
+    ipAddress: req.ip
+  });
+
   res.json({ message: 'Student updated successfully' });
 });
 
-// DELETE /api/students/:id - Delete student (Admin only)
-router.delete('/:id', verifyToken, requireRoles('admin'), (req, res) => {
-  const student = db.prepare('SELECT user_id FROM students WHERE id = ?').get(req.params.id);
+// DELETE /api/students/:id - Delete student (Admin only with audit log)
+router.delete('/:id', verifyToken, requirePermission('students', 'delete'), (req, res) => {
+  const student = db.prepare(`
+    SELECT s.*, u.full_name, u.email
+    FROM students s
+    JOIN users u ON s.user_id = u.id
+    WHERE s.id = ?
+  `).get(req.params.id);
+
   if (!student) {
     return res.status(404).json({ error: 'Student not found' });
   }
+
+  logAudit({
+    userId: req.user.id,
+    userRole: req.user.role,
+    userEmail: req.user.email,
+    action: 'STUDENT_RECORD_DELETE',
+    entityType: 'students',
+    entityId: req.params.id,
+    oldValue: { rollNo: student.roll_no, name: student.full_name, email: student.email },
+    newValue: null,
+    reason: req.body?.reason || 'Record de-registration by Admin',
+    ipAddress: req.ip
+  });
 
   db.prepare('DELETE FROM users WHERE id = ?').run(student.user_id);
   res.json({ message: 'Student record deleted successfully' });

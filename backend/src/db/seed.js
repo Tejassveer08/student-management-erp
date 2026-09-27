@@ -954,6 +954,108 @@ async function seedDatabase() {
     0
   );
 
+  // 19. Faculty Class & Subject Mapping (RBAC DB Scoping)
+  const insertFacultyClassMap = db.prepare(`
+    INSERT INTO faculty_class_map (faculty_id, subject_id, course_id, department_id, semester, section, academic_year)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  // Ms. Basanti Pal Nandi (Faculty 1) -> Algorithms, Software Engineering, Algo Lab in CSE-2
+  insertFacultyClassMap.run(facNandi, subAlgo, courseBTechCSEId, deptCSEId, 4, 'CSE-2', '2025-2026');
+  insertFacultyClassMap.run(facNandi, subSE, courseBTechCSEId, deptCSEId, 4, 'CSE-2', '2025-2026');
+  insertFacultyClassMap.run(facNandi, subAlgoLab, courseBTechCSEId, deptCSEId, 4, 'CSE-2', '2025-2026');
+
+  // Dr. Rajesh Sharma (Faculty 2) -> Operating Systems & OS Lab in CSE-2
+  insertFacultyClassMap.run(facSharma, subOS, courseBTechCSEId, deptCSEId, 4, 'CSE-2', '2025-2026');
+  insertFacultyClassMap.run(facSharma, subOSLab, courseBTechCSEId, deptCSEId, 4, 'CSE-2', '2025-2026');
+
+  // Dr. Jaspreet Singh (Faculty 3) -> Computer Networks & AI in CSE-2
+  insertFacultyClassMap.run(facSingh, subCN, courseBTechCSEId, deptCSEId, 4, 'CSE-2', '2025-2026');
+  insertFacultyClassMap.run(facSingh, subAI, courseBTechCSEId, deptCSEId, 4, 'CSE-2', '2025-2026');
+
+  // 20. Parent Ward Links (Multi-ward support & DB Scoping)
+  const insertWardLink = db.prepare(`
+    INSERT INTO ward_links (parent_user_id, student_id, relationship, is_primary)
+    VALUES (?, ?, ?, ?)
+  `);
+
+  // Jaswinder Singh (parentTejassveerId) linked to Tejassveer (sTejassveerId)
+  insertWardLink.run(parentTejassveerId, sTejassveerId, 'Father', 1);
+  // Also link Dev Sharma to Jaswinder as guardian to demonstrate multi-ward switcher in Parent portal!
+  insertWardLink.run(parentTejassveerId, sDevId, 'Guardian', 0);
+
+  // Ramesh Gupta linked to Aman Gupta
+  insertWardLink.run(parentAmanId, sAmanId, 'Father', 1);
+
+  // 21. Institutional Settings (Admin Configurable)
+  const insertSetting = db.prepare(`
+    INSERT OR REPLACE INTO institution_settings (setting_key, setting_value, description, category, updated_by)
+    VALUES (?, ?, ?, ?, ?)
+  `);
+
+  insertSetting.run('attendance_threshold', '75.0', 'Mandatory minimum attendance percentage required for university exam eligibility', 'Academic', adminUserId);
+  insertSetting.run('grading_scale', JSON.stringify({
+    'O': { min: 90, points: 10, label: 'Outstanding' },
+    'A+': { min: 80, points: 9, label: 'Excellent' },
+    'A': { min: 70, points: 8, label: 'Very Good' },
+    'B+': { min: 60, points: 7, label: 'Good' },
+    'B': { min: 50, points: 6, label: 'Above Average' },
+    'C': { min: 40, points: 5, label: 'Pass' },
+    'F': { min: 0, points: 0, label: 'Fail' }
+  }), 'Official GGSIPU 10-point absolute letter grading system', 'Academic', adminUserId);
+  insertSetting.run('academic_session', '2025-2026', 'Active academic year and semester cycle', 'General', adminUserId);
+  insertSetting.run('late_fee_per_day', '100', 'Penalty fine in INR applied per day past semester tuition due date', 'Financial', adminUserId);
+  insertSetting.run('cgpa_probability_weights', JSON.stringify({
+    'difficulty_weight': 0.35,
+    'internal_weight': 0.45,
+    'attendance_weight': 0.20
+  }), 'Weights assigned to subject difficulty, continuous internal marks, and live attendance', 'Analytics', adminUserId);
+
+  // 22. Audit Logs
+  const insertAuditLog = db.prepare(`
+    INSERT INTO audit_logs (user_id, user_role, user_email, action, entity_type, entity_id, old_value, new_value, reason, ip_address)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  insertAuditLog.run(
+    adminUserId,
+    'admin',
+    'admin@gtbit.ac.in',
+    'ATTENDANCE_OVERRIDE',
+    'attendance_records',
+    '142',
+    JSON.stringify({ status: 'Absent', date: '2026-09-12' }),
+    JSON.stringify({ status: 'Present (Duty Leave)', approvedBy: 'Dean Academics' }),
+    'Student attended Inter-College Smart India Hackathon representing GTBIT',
+    '192.168.1.15'
+  );
+
+  insertAuditLog.run(
+    adminUserId,
+    'admin',
+    'admin@gtbit.ac.in',
+    'FEE_FINE_WAIVER',
+    'student_fee_payments',
+    '3',
+    JSON.stringify({ fine_amount: 1500 }),
+    JSON.stringify({ fine_amount: 0, waiver_applied: true }),
+    'Medical exemption approved by Principal / Director',
+    '192.168.1.15'
+  );
+
+  insertAuditLog.run(
+    adminUserId,
+    'admin',
+    'admin@gtbit.ac.in',
+    'MARKS_MODERATION',
+    'exam_marks',
+    '88',
+    JSON.stringify({ internal_assessment: 18 }),
+    JSON.stringify({ internal_assessment: 22 }),
+    'Re-evaluation of Unit Test 2 answer sheet verified by HOD',
+    '192.168.1.15'
+  );
+
   console.log('Database seeding successfully finished! Rich GTBIT test data populated.');
 }
 

@@ -380,3 +380,63 @@ CREATE TABLE IF NOT EXISTS notifications (
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB;
+
+-- 22. Faculty to Class & Subject Mapping (RBAC DB Scoping)
+CREATE TABLE IF NOT EXISTS faculty_class_map (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  faculty_id INT NOT NULL,
+  subject_id INT NOT NULL,
+  course_id INT NOT NULL,
+  department_id INT NOT NULL,
+  semester INT NOT NULL,
+  section VARCHAR(20) NOT NULL,
+  academic_year VARCHAR(30) DEFAULT '2025-2026',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY unique_faculty_class (faculty_id, subject_id, semester, section),
+  FOREIGN KEY (faculty_id) REFERENCES faculty(id) ON DELETE CASCADE,
+  FOREIGN KEY (subject_id) REFERENCES subjects(id) ON DELETE CASCADE,
+  FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE,
+  FOREIGN KEY (department_id) REFERENCES departments(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+-- 23. Parent to Student Ward Links (RBAC DB Scoping)
+CREATE TABLE IF NOT EXISTS ward_links (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  parent_user_id INT NOT NULL,
+  student_id INT NOT NULL,
+  relationship VARCHAR(50) DEFAULT 'Father',
+  is_primary TINYINT(1) DEFAULT 1,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY unique_ward_link (parent_user_id, student_id),
+  FOREIGN KEY (parent_user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (student_id) REFERENCES students(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+-- 24. Audit Logs for Admin Overrides and Destructive Actions
+CREATE TABLE IF NOT EXISTS audit_logs (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  user_id INT NOT NULL,
+  user_role VARCHAR(20) NOT NULL,
+  user_email VARCHAR(150) NOT NULL,
+  action VARCHAR(100) NOT NULL,
+  entity_type VARCHAR(100) NOT NULL,
+  entity_id VARCHAR(50) NOT NULL,
+  old_value TEXT,
+  new_value TEXT,
+  reason TEXT,
+  ip_address VARCHAR(45),
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+-- 25. Institutional Governance Settings (Admin Configurable)
+CREATE TABLE IF NOT EXISTS institution_settings (
+  setting_key VARCHAR(100) PRIMARY KEY,
+  setting_value TEXT NOT NULL,
+  description VARCHAR(255),
+  category VARCHAR(50) DEFAULT 'Academic',
+  updated_by INT,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB;
+

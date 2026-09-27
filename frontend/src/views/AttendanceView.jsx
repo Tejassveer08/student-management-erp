@@ -14,8 +14,21 @@ import {
   Plus,
   Search,
   Check,
-  Percent
+  Percent,
+  ShieldAlert,
+  Edit3
 } from 'lucide-react';
+import {
+  ResponsiveContainer,
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  Tooltip,
+  CartesianGrid,
+  ReferenceLine,
+  Legend
+} from 'recharts';
 
 export default function AttendanceView() {
   const { user, token } = useAuth();
@@ -24,6 +37,14 @@ export default function AttendanceView() {
   const [subjects, setSubjects] = useState([]);
   const [students, setStudents] = useState([]);
   const [loading, setLoading] = useState(true);
+
+  // Admin Override Modal State
+  const [showOverrideModal, setShowOverrideModal] = useState(false);
+  const [overrideRecordId, setOverrideRecordId] = useState('');
+  const [overrideStatus, setOverrideStatus] = useState('Present');
+  const [overrideReason, setOverrideReason] = useState('Approved university duty leave for technical symposium');
+  const [overrideLoading, setOverrideLoading] = useState(false);
+  const [overrideToast, setOverrideToast] = useState(null);
 
   // Faculty session creation & QR state
   const [showQRModal, setShowQRModal] = useState(false);
@@ -225,10 +246,63 @@ export default function AttendanceView() {
     document.body.removeChild(link);
   };
 
+  const handleOverrideSubmit = async () => {
+    if (!overrideRecordId || !overrideReason) {
+      alert('Attendance Record ID and mandatory justification are required');
+      return;
+    }
+    setOverrideLoading(true);
+    try {
+      const res = await fetch('/api/attendance/override', {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          recordId: Number(overrideRecordId),
+          status: overrideStatus,
+          reason: overrideReason
+        })
+      });
+      if (res.ok) {
+        setOverrideToast(`Record #${overrideRecordId} successfully updated with audit trail!`);
+        setShowOverrideModal(false);
+        setTimeout(() => setOverrideToast(null), 4000);
+        fetchData();
+      } else {
+        const err = await res.json();
+        alert(`Override failed: ${err.error || 'Server error'}`);
+      }
+    } catch (e) {
+      alert(`Network error: ${e.message}`);
+    } finally {
+      setOverrideLoading(false);
+    }
+  };
+
   const isFacultyOrAdmin = user?.role === 'admin' || user?.role === 'faculty';
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+      {/* Toast Alert */}
+      {overrideToast && (
+        <div style={{
+          padding: '0.85rem 1.25rem',
+          borderRadius: 'var(--radius-md)',
+          background: 'var(--success-bg)',
+          border: '1px solid var(--success-border)',
+          color: 'var(--success)',
+          fontWeight: 700,
+          display: 'flex',
+          alignItems: 'center',
+          gap: '0.5rem'
+        }}>
+          <CheckCircle2 size={18} />
+          {overrideToast}
+        </div>
+      )}
+
       {/* Header Banner */}
       <div className="glass-panel" style={{
         padding: '1.5rem 2rem',
@@ -237,19 +311,31 @@ export default function AttendanceView() {
         alignItems: 'center',
         justifyContent: 'space-between',
         flexWrap: 'wrap',
-        gap: '1rem'
+        gap: '1rem',
+        borderLeft: '5px solid var(--role-accent)',
+        boxShadow: '0 4px 20px var(--role-accent-glow)'
       }}>
         <div>
           <div className="badge badge-info" style={{ marginBottom: '0.4rem' }}>
             Enhanced ERP Capability (Module 2.D)
           </div>
-          <h1 style={{ fontSize: '1.75rem' }}>Smart Attendance Tracker</h1>
+          <h1 style={{ fontSize: '1.75rem', fontWeight: 800 }}>Smart Attendance Tracker</h1>
           <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginTop: '0.2rem' }}>
             Real-time percentage monitoring, dynamic QR codes, one-tap marking, and automated 75% threshold alerts.
           </p>
         </div>
 
         <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+          {user?.role === 'admin' && (
+            <button 
+              onClick={() => setShowOverrideModal(true)} 
+              className="btn btn-warning btn-sm"
+              style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontWeight: 700 }}
+            >
+              <ShieldAlert size={16} /> Compliance Audit Override
+            </button>
+          )}
+
           {isFacultyOrAdmin && (
             <button onClick={() => setShowQRModal(true)} className="btn btn-primary btn-sm">
               <QrCode size={16} /> Launch Live QR Session
@@ -353,6 +439,39 @@ export default function AttendanceView() {
           </div>
         </div>
       )}
+
+      {/* Flagship Innovation: Attendance Progression & Trend Line Chart */}
+      <div className="glass-panel" style={{ padding: '1.5rem' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+          <div>
+            <h3 style={{ fontSize: '1.1rem', fontWeight: 700 }}>Attendance Progression & Longitudinal Trend</h3>
+            <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+              Temporal attendance compliance tracking vs 75% GGSIPU statutory examination eligibility requirement
+            </p>
+          </div>
+          <span className="badge badge-success" style={{ fontWeight: 700 }}>
+            Mandatory Compliance Bar: 75%
+          </span>
+        </div>
+
+        <div style={{ height: '220px', width: '100%' }}>
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={trends.length > 0 ? trends : [
+              { date: '2026-03-01', percentage: 91.5 },
+              { date: '2026-03-08', percentage: 89.0 },
+              { date: '2026-03-15', percentage: 86.4 },
+              { date: '2026-03-22', percentage: 88.5 }
+            ]}>
+              <CartesianGrid strokeDasharray="3 3" vertical={false} opacity={0.2} />
+              <XAxis dataKey="date" tick={{ fill: 'var(--text-secondary)', fontSize: 11 }} />
+              <YAxis domain={[50, 100]} tick={{ fill: 'var(--text-secondary)', fontSize: 11 }} />
+              <Tooltip formatter={(val) => `${val}%`} />
+              <Line type="monotone" dataKey="percentage" stroke="var(--role-accent)" strokeWidth={3} dot={{ r: 4 }} name="Attendance %" />
+              <ReferenceLine y={75} stroke="#ef4444" strokeDasharray="4 4" strokeWidth={2} label={{ value: '75% Threshold', fill: '#ef4444', fontSize: 11, position: 'right' }} />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
 
       {/* Subject-Wise Attendance Breakdown Table */}
       <div className="glass-panel" style={{ padding: '1.5rem' }}>
@@ -616,6 +735,70 @@ export default function AttendanceView() {
               </button>
               <button onClick={handleStudentCheckin} className="btn btn-primary">
                 Confirm Check-In
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Admin Compliance Override Modal (Mandatory Audit Logging) */}
+      {showOverrideModal && (
+        <div className="modal-overlay">
+          <div className="modal-content" style={{ maxWidth: '480px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.4rem' }}>
+              <ShieldAlert size={20} color="var(--danger)" />
+              <h3 style={{ fontSize: '1.2rem', fontWeight: 800 }}>Admin Attendance Override</h3>
+            </div>
+            <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '1.25rem' }}>
+              Superuser authority to correct locked attendance records. Requires a mandatory audit log justification.
+            </p>
+
+            <div className="form-group">
+              <label className="form-label">Attendance Record ID</label>
+              <input
+                type="number"
+                className="form-input"
+                placeholder="e.g. 627"
+                value={overrideRecordId}
+                onChange={(e) => setOverrideRecordId(e.target.value)}
+              />
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">New Corrected Status</label>
+              <select
+                className="form-select"
+                value={overrideStatus}
+                onChange={(e) => setOverrideStatus(e.target.value)}
+              >
+                <option value="Present">Present (Full Credit)</option>
+                <option value="Late">Late (0.5x Credit)</option>
+                <option value="Absent">Absent (Zero Credit)</option>
+              </select>
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">Mandatory Audit Justification / Reason</label>
+              <textarea
+                className="form-input"
+                rows="3"
+                placeholder="e.g. Official university symposium attendance duty leave sanctioned by HOD"
+                value={overrideReason}
+                onChange={(e) => setOverrideReason(e.target.value)}
+              />
+            </div>
+
+            <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end', marginTop: '1.25rem' }}>
+              <button onClick={() => setShowOverrideModal(false)} className="btn btn-secondary">
+                Cancel
+              </button>
+              <button 
+                onClick={handleOverrideSubmit} 
+                disabled={overrideLoading}
+                className="btn btn-primary"
+                style={{ background: 'var(--role-accent)', fontWeight: 700 }}
+              >
+                {overrideLoading ? 'Logging & Overriding...' : 'Confirm Audit Override'}
               </button>
             </div>
           </div>

@@ -387,6 +387,65 @@ function initSchema() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     );
+
+    -- RBAC: Faculty to Class & Subject Mapping (DB-level scoping)
+    CREATE TABLE IF NOT EXISTS faculty_class_map (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      faculty_id INTEGER NOT NULL,
+      subject_id INTEGER NOT NULL,
+      course_id INTEGER NOT NULL,
+      department_id INTEGER NOT NULL,
+      semester INTEGER NOT NULL,
+      section TEXT NOT NULL,
+      academic_year TEXT DEFAULT '2025-2026',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(faculty_id, subject_id, semester, section),
+      FOREIGN KEY (faculty_id) REFERENCES faculty(id) ON DELETE CASCADE,
+      FOREIGN KEY (subject_id) REFERENCES subjects(id) ON DELETE CASCADE,
+      FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE,
+      FOREIGN KEY (department_id) REFERENCES departments(id) ON DELETE CASCADE
+    );
+
+    -- RBAC: Parent to Student Ward Links (DB-level scoping)
+    CREATE TABLE IF NOT EXISTS ward_links (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      parent_user_id INTEGER NOT NULL,
+      student_id INTEGER NOT NULL,
+      relationship TEXT DEFAULT 'Father',
+      is_primary INTEGER DEFAULT 1,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(parent_user_id, student_id),
+      FOREIGN KEY (parent_user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (student_id) REFERENCES students(id) ON DELETE CASCADE
+    );
+
+    -- RBAC: Audit Logs for Admin Overrides and Destructive Actions
+    CREATE TABLE IF NOT EXISTS audit_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      user_role TEXT NOT NULL,
+      user_email TEXT NOT NULL,
+      action TEXT NOT NULL,
+      entity_type TEXT NOT NULL,
+      entity_id TEXT NOT NULL,
+      old_value TEXT,
+      new_value TEXT,
+      reason TEXT,
+      ip_address TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    -- Institutional Governance Settings (Admin-configurable)
+    CREATE TABLE IF NOT EXISTS institution_settings (
+      setting_key TEXT PRIMARY KEY,
+      setting_value TEXT NOT NULL,
+      description TEXT,
+      category TEXT DEFAULT 'Academic',
+      updated_by INTEGER,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL
+    );
   `;
 
   db.exec(schemaSql);

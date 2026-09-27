@@ -1,7 +1,10 @@
 /* ==========================================================================
-   GTBIT Student Management ERP System - Design System
-   Modern Glassmorphism, Dual Theme (Light & Dark), Micro-Interactions
+   GTBIT Student Management ERP System - Premium Design System v2.0
+   Advanced Glassmorphism, Animated Mesh Gradients, Micro-Interactions,
+   Staggered Entrance Animations, Floating Particles, Dual Theme
    ========================================================================== */
+
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,400&family=JetBrains+Mono:wght@400;500;600&display=swap');
 
 :root {
   /* Color Palette - Vibrant Indigo & Emerald Theme */
@@ -37,28 +40,30 @@
   --info-border: rgba(2, 132, 199, 0.3);
 
   /* Light Theme Defaults */
-  --bg-page: #f8fafc;
+  --bg-page: #f0f4f8;
   --bg-surface: #ffffff;
   --bg-surface-elevated: #ffffff;
   --bg-surface-subtle: #f1f5f9;
-  --bg-sidebar: #ffffff;
-  --bg-glass: rgba(255, 255, 255, 0.85);
+  --bg-sidebar: rgba(255, 255, 255, 0.92);
+  --bg-glass: rgba(255, 255, 255, 0.72);
 
   --text-primary: #0f172a;
   --text-secondary: #475569;
   --text-muted: #94a3b8;
   --text-inverse: #ffffff;
 
-  --border-subtle: #e2e8f0;
+  --border-subtle: rgba(226, 232, 240, 0.8);
   --border-strong: #cbd5e1;
-  --border-glow: rgba(79, 70, 229, 0.2);
+  --border-glow: rgba(79, 70, 229, 0.3);
 
-  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
-  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.08), 0 2px 4px -2px rgba(0, 0, 0, 0.04);
-  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.08), 0 4px 6px -4px rgba(0, 0, 0, 0.04);
-  --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.08), 0 8px 10px -6px rgba(0, 0, 0, 0.04);
-  --shadow-glow: 0 0 20px rgba(79, 70, 229, 0.15);
+  --shadow-sm: 0 1px 3px 0 rgba(0, 0, 0, 0.04), 0 1px 2px -1px rgba(0, 0, 0, 0.06);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.07), 0 2px 4px -2px rgba(0, 0, 0, 0.04);
+  --shadow-lg: 0 10px 25px -3px rgba(0, 0, 0, 0.08), 0 4px 10px -4px rgba(0, 0, 0, 0.04);
+  --shadow-xl: 0 20px 40px -5px rgba(0, 0, 0, 0.1), 0 8px 16px -6px rgba(0, 0, 0, 0.05);
+  --shadow-glow: 0 0 30px rgba(79, 70, 229, 0.15);
+  --shadow-float: 0 20px 60px -15px rgba(0, 0, 0, 0.15);
 
+  --radius-xs: 6px;
   --radius-sm: 8px;
   --radius-md: 12px;
   --radius-lg: 16px;
@@ -68,34 +73,95 @@
   --font-main: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
   --font-mono: 'JetBrains Mono', monospace;
   --transition-fast: 0.15s cubic-bezier(0.4, 0, 0.2, 1);
-  --transition-normal: 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-normal: 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-smooth: 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+  --transition-bounce: 0.6s cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  /* Floating orb colors */
+  --orb-1: rgba(79, 70, 229, 0.12);
+  --orb-2: rgba(6, 182, 212, 0.1);
+  --orb-3: rgba(139, 92, 246, 0.08);
 }
 
 [data-theme='dark'] {
-  --bg-page: #0b0f19;
-  --bg-surface: #111827;
+  --bg-page: #080c14;
+  --bg-surface: rgba(17, 24, 39, 0.95);
   --bg-surface-elevated: #1e293b;
-  --bg-surface-subtle: #1a2234;
-  --bg-sidebar: #0e1422;
-  --bg-glass: rgba(17, 24, 39, 0.85);
+  --bg-surface-subtle: rgba(26, 34, 52, 0.8);
+  --bg-sidebar: rgba(14, 20, 34, 0.95);
+  --bg-glass: rgba(17, 24, 39, 0.75);
 
-  --text-primary: #f8fafc;
+  --text-primary: #f1f5f9;
   --text-secondary: #cbd5e1;
   --text-muted: #64748b;
   --text-inverse: #0f172a;
 
-  --border-subtle: #1e293b;
+  --border-subtle: rgba(30, 41, 59, 0.8);
   --border-strong: #334155;
-  --border-glow: rgba(99, 102, 241, 0.35);
+  --border-glow: rgba(99, 102, 241, 0.4);
 
-  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.3);
-  --shadow-md: 0 4px 8px -1px rgba(0, 0, 0, 0.4);
+  --shadow-sm: 0 1px 3px 0 rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 8px -1px rgba(0, 0, 0, 0.5);
   --shadow-lg: 0 10px 20px -3px rgba(0, 0, 0, 0.5);
-  --shadow-xl: 0 20px 30px -5px rgba(0, 0, 0, 0.6);
-  --shadow-glow: 0 0 25px rgba(99, 102, 241, 0.25);
+  --shadow-xl: 0 20px 40px -5px rgba(0, 0, 0, 0.6);
+  --shadow-glow: 0 0 40px rgba(99, 102, 241, 0.2);
+  --shadow-float: 0 20px 60px -15px rgba(0, 0, 0, 0.5);
+
+  --orb-1: rgba(79, 70, 229, 0.15);
+  --orb-2: rgba(6, 182, 212, 0.1);
+  --orb-3: rgba(139, 92, 246, 0.12);
 }
 
-/* Base Resets */
+/* ==========================================================================
+   Role-Specific Design Identity & Visual Accents
+   ========================================================================== */
+:root, [data-role='admin'] {
+  --role-accent: #4f46e5;
+  --role-accent-light: #818cf8;
+  --role-accent-dark: #3730a3;
+  --role-accent-glow: rgba(79, 70, 229, 0.22);
+  --role-badge-bg: rgba(79, 70, 229, 0.1);
+  --role-badge-text: #4338ca;
+  --role-badge-border: rgba(79, 70, 229, 0.25);
+  --role-gradient: linear-gradient(135deg, #4f46e5 0%, #818cf8 50%, #6366f1 100%);
+}
+
+[data-role='faculty'] {
+  --role-accent: #0d9488;
+  --role-accent-light: #2dd4bf;
+  --role-accent-dark: #0f766e;
+  --role-accent-glow: rgba(13, 148, 136, 0.22);
+  --role-badge-bg: rgba(13, 148, 136, 0.1);
+  --role-badge-text: #0f766e;
+  --role-badge-border: rgba(13, 148, 136, 0.25);
+  --role-gradient: linear-gradient(135deg, #0d9488 0%, #2dd4bf 50%, #14b8a6 100%);
+}
+
+[data-role='parent'] {
+  --role-accent: #d97706;
+  --role-accent-light: #fbbf24;
+  --role-accent-dark: #b45309;
+  --role-accent-glow: rgba(217, 119, 6, 0.22);
+  --role-badge-bg: rgba(217, 119, 6, 0.1);
+  --role-badge-text: #b45309;
+  --role-badge-border: rgba(217, 119, 6, 0.25);
+  --role-gradient: linear-gradient(135deg, #d97706 0%, #fbbf24 50%, #f59e0b 100%);
+}
+
+[data-role='student'] {
+  --role-accent: #2563eb;
+  --role-accent-light: #60a5fa;
+  --role-accent-dark: #1d4ed8;
+  --role-accent-glow: rgba(37, 99, 235, 0.22);
+  --role-badge-bg: rgba(37, 99, 235, 0.1);
+  --role-badge-text: #1d4ed8;
+  --role-badge-border: rgba(37, 99, 235, 0.25);
+  --role-gradient: linear-gradient(135deg, #2563eb 0%, #60a5fa 50%, #3b82f6 100%);
+}
+
+/* ==========================================================================
+   Base Resets & Typography
+   ========================================================================== */
 *, *::before, *::after {
   box-sizing: border-box;
   margin: 0;
@@ -106,44 +172,82 @@ body {
   font-family: var(--font-main);
   background-color: var(--bg-page);
   color: var(--text-primary);
-  line-height: 1.5;
+  line-height: 1.6;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   min-height: 100vh;
   overflow-x: hidden;
   transition: background-color var(--transition-normal), color var(--transition-normal);
+  position: relative;
 }
 
-/* Background Atmosphere Glow */
+/* ==========================================================================
+   Animated Mesh Gradient Background
+   ========================================================================== */
 body::before {
   content: '';
   position: fixed;
-  top: -10%;
+  top: -20%;
   left: -10%;
-  width: 50vw;
-  height: 50vw;
-  background: radial-gradient(circle, rgba(79, 70, 229, 0.08) 0%, rgba(6, 182, 212, 0.04) 40%, transparent 70%);
+  width: 60vw;
+  height: 60vw;
+  background: radial-gradient(circle, var(--orb-1) 0%, transparent 65%);
   pointer-events: none;
   z-index: 0;
+  animation: floatOrb1 25s ease-in-out infinite;
 }
 
 body::after {
   content: '';
   position: fixed;
-  bottom: -15%;
-  right: -10%;
+  bottom: -20%;
+  right: -15%;
   width: 55vw;
   height: 55vw;
-  background: radial-gradient(circle, rgba(139, 92, 246, 0.07) 0%, rgba(16, 185, 129, 0.04) 40%, transparent 70%);
+  background: radial-gradient(circle, var(--orb-3) 0%, transparent 65%);
   pointer-events: none;
   z-index: 0;
+  animation: floatOrb2 30s ease-in-out infinite;
 }
 
-/* Typography Helpers */
+@keyframes floatOrb1 {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  33% { transform: translate(5vw, 3vh) scale(1.08); }
+  66% { transform: translate(-3vw, -2vh) scale(0.95); }
+}
+
+@keyframes floatOrb2 {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  33% { transform: translate(-4vw, -3vh) scale(1.05); }
+  66% { transform: translate(6vw, 2vh) scale(0.92); }
+}
+
+/* Third floating orb using a pseudo on #root */
+#root::before {
+  content: '';
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  width: 45vw;
+  height: 45vw;
+  transform: translate(-50%, -50%);
+  background: radial-gradient(circle, var(--orb-2) 0%, transparent 60%);
+  pointer-events: none;
+  z-index: 0;
+  animation: floatOrb3 20s ease-in-out infinite;
+}
+
+@keyframes floatOrb3 {
+  0%, 100% { transform: translate(-50%, -50%) scale(1); }
+  50% { transform: translate(-45%, -55%) scale(1.1); }
+}
+
+/* Typography */
 h1, h2, h3, h4, h5, h6 {
   font-weight: 700;
   color: var(--text-primary);
-  letter-spacing: -0.02em;
+  letter-spacing: -0.025em;
+  line-height: 1.3;
 }
 
 a {
@@ -156,21 +260,29 @@ a:hover {
   color: var(--primary-hover);
 }
 
-/* Card and Glass Utilities */
+/* ==========================================================================
+   Glass Panel - Premium Frosted Glass Cards
+   ========================================================================== */
 .glass-panel {
   background: var(--bg-glass);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(20px) saturate(1.5);
+  -webkit-backdrop-filter: blur(20px) saturate(1.5);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-md);
-  transition: transform var(--transition-fast), box-shadow var(--transition-fast), border-color var(--transition-fast);
+  transition: transform var(--transition-normal), box-shadow var(--transition-normal), border-color var(--transition-normal);
+  position: relative;
+  z-index: 1;
 }
 
 .glass-panel:hover {
   border-color: var(--border-glow);
+  box-shadow: var(--shadow-lg);
 }
 
+/* ==========================================================================
+   Stat Cards - Elevated with Gradient Accent
+   ========================================================================== */
 .stat-card {
   padding: 1.25rem 1.5rem;
   border-radius: var(--radius-md);
@@ -182,12 +294,14 @@ a:hover {
   gap: 0.5rem;
   position: relative;
   overflow: hidden;
-  transition: transform var(--transition-fast), box-shadow var(--transition-fast);
+  transition: transform var(--transition-normal), box-shadow var(--transition-normal), border-color var(--transition-normal);
+  cursor: default;
 }
 
 .stat-card:hover {
-  transform: translateY(-2px);
-  box-shadow: var(--shadow-md);
+  transform: translateY(-4px);
+  box-shadow: var(--shadow-lg);
+  border-color: var(--border-glow);
 }
 
 .stat-card::before {
@@ -197,17 +311,41 @@ a:hover {
   left: 0;
   width: 4px;
   height: 100%;
-  background: var(--primary);
+  background: var(--role-gradient);
   border-radius: 4px 0 0 4px;
+  transition: width var(--transition-normal);
 }
 
-.stat-card.success::before { background: var(--success); }
-.stat-card.warning::before { background: var(--warning); }
-.stat-card.danger::before { background: var(--danger); }
-.stat-card.info::before { background: var(--info); }
-.stat-card.purple::before { background: var(--accent-purple); }
+.stat-card:hover::before {
+  width: 6px;
+}
 
-/* Buttons */
+.stat-card.success::before { background: linear-gradient(180deg, #10b981 0%, #059669 100%); }
+.stat-card.warning::before { background: linear-gradient(180deg, #f59e0b 0%, #d97706 100%); }
+.stat-card.danger::before { background: linear-gradient(180deg, #ef4444 0%, #dc2626 100%); }
+.stat-card.info::before { background: linear-gradient(180deg, #0284c7 0%, #0369a1 100%); }
+.stat-card.purple::before { background: linear-gradient(180deg, #8b5cf6 0%, #7c3aed 100%); }
+
+/* Shimmer overlay on stat cards */
+.stat-card::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent 0%, rgba(255, 255, 255, 0.04) 50%, transparent 100%);
+  transition: left 0.6s ease;
+  pointer-events: none;
+}
+
+.stat-card:hover::after {
+  left: 100%;
+}
+
+/* ==========================================================================
+   Buttons - Refined with Better Feedback
+   ========================================================================== */
 .btn {
   display: inline-flex;
   align-items: center;
@@ -218,14 +356,30 @@ a:hover {
   font-weight: 600;
   border-radius: var(--radius-md);
   cursor: pointer;
-  transition: all var(--transition-fast);
+  transition: all var(--transition-normal);
   border: 1px solid transparent;
   outline: none;
   font-family: inherit;
+  position: relative;
+  overflow: hidden;
+}
+
+.btn::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, rgba(255,255,255,0.15) 0%, transparent 100%);
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+  pointer-events: none;
+}
+
+.btn:hover::after {
+  opacity: 1;
 }
 
 .btn:active {
-  transform: scale(0.98);
+  transform: scale(0.97);
 }
 
 .btn:disabled {
@@ -235,15 +389,14 @@ a:hover {
 }
 
 .btn-primary {
-  background: linear-gradient(135deg, var(--primary) 0%, #6366f1 100%);
+  background: var(--role-gradient);
   color: #ffffff;
-  box-shadow: 0 4px 12px var(--primary-glow);
+  box-shadow: 0 4px 14px var(--role-accent-glow);
 }
 
 .btn-primary:hover:not(:disabled) {
-  background: linear-gradient(135deg, var(--primary-hover) 0%, #4f46e5 100%);
-  box-shadow: 0 6px 16px var(--primary-glow);
-  transform: translateY(-1px);
+  box-shadow: 0 6px 20px var(--role-accent-glow);
+  transform: translateY(-2px);
 }
 
 .btn-secondary {
@@ -255,33 +408,40 @@ a:hover {
 .btn-secondary:hover:not(:disabled) {
   background: var(--border-subtle);
   border-color: var(--border-strong);
+  transform: translateY(-1px);
 }
 
 .btn-outline {
   background: transparent;
-  border-color: var(--primary);
-  color: var(--primary);
+  border-color: var(--role-accent);
+  color: var(--role-accent);
 }
 
 .btn-outline:hover:not(:disabled) {
-  background: var(--primary-glow);
+  background: var(--role-badge-bg);
+  transform: translateY(-1px);
 }
 
 .btn-success {
   background: linear-gradient(135deg, #10b981 0%, #059669 100%);
   color: #ffffff;
-  box-shadow: 0 4px 12px rgba(16, 185, 129, 0.25);
+  box-shadow: 0 4px 14px rgba(16, 185, 129, 0.25);
 }
 
 .btn-success:hover:not(:disabled) {
-  transform: translateY(-1px);
-  box-shadow: 0 6px 16px rgba(16, 185, 129, 0.35);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(16, 185, 129, 0.35);
 }
 
 .btn-danger {
   background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
   color: #ffffff;
-  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.25);
+  box-shadow: 0 4px 14px rgba(239, 68, 68, 0.25);
+}
+
+.btn-danger:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(239, 68, 68, 0.35);
 }
 
 .btn-sm {
@@ -293,9 +453,12 @@ a:hover {
 .btn-lg {
   padding: 0.875rem 1.75rem;
   font-size: 1rem;
+  border-radius: var(--radius-lg);
 }
 
-/* Badges & Pills */
+/* ==========================================================================
+   Badges & Pills
+   ========================================================================== */
 .badge {
   display: inline-flex;
   align-items: center;
@@ -305,39 +468,22 @@ a:hover {
   font-size: 0.75rem;
   font-weight: 600;
   white-space: nowrap;
+  transition: transform var(--transition-fast);
 }
 
-.badge-success {
-  background: var(--success-bg);
-  color: var(--success);
-  border: 1px solid var(--success-border);
+.badge:hover {
+  transform: scale(1.05);
 }
 
-.badge-warning {
-  background: var(--warning-bg);
-  color: var(--warning);
-  border: 1px solid var(--warning-border);
-}
+.badge-success { background: var(--success-bg); color: var(--success); border: 1px solid var(--success-border); }
+.badge-warning { background: var(--warning-bg); color: var(--warning); border: 1px solid var(--warning-border); }
+.badge-danger { background: var(--danger-bg); color: var(--danger); border: 1px solid var(--danger-border); }
+.badge-info { background: var(--info-bg); color: var(--info); border: 1px solid var(--info-border); }
+.badge-primary { background: var(--primary-glow); color: var(--primary); border: 1px solid rgba(79, 70, 229, 0.3); }
 
-.badge-danger {
-  background: var(--danger-bg);
-  color: var(--danger);
-  border: 1px solid var(--danger-border);
-}
-
-.badge-info {
-  background: var(--info-bg);
-  color: var(--info);
-  border: 1px solid var(--info-border);
-}
-
-.badge-primary {
-  background: var(--primary-glow);
-  color: var(--primary);
-  border: 1px solid rgba(79, 70, 229, 0.3);
-}
-
-/* Form Controls */
+/* ==========================================================================
+   Form Controls - Refined Focus States
+   ========================================================================== */
 .form-group {
   display: flex;
   flex-direction: column;
@@ -353,20 +499,24 @@ a:hover {
 
 .form-input, .form-select, .form-textarea {
   width: 100%;
-  padding: 0.625rem 0.875rem;
+  padding: 0.7rem 1rem;
   font-size: 0.875rem;
   font-family: inherit;
   color: var(--text-primary);
   background: var(--bg-surface);
-  border: 1px solid var(--border-subtle);
+  border: 1.5px solid var(--border-subtle);
   border-radius: var(--radius-md);
-  transition: all var(--transition-fast);
+  transition: all var(--transition-normal);
   outline: none;
 }
 
 .form-input:focus, .form-select:focus, .form-textarea:focus {
-  border-color: var(--primary);
-  box-shadow: 0 0 0 3px var(--primary-glow);
+  border-color: var(--role-accent);
+  box-shadow: 0 0 0 4px var(--role-accent-glow);
+}
+
+.form-input::placeholder {
+  color: var(--text-muted);
 }
 
 .form-textarea {
@@ -374,13 +524,16 @@ a:hover {
   resize: vertical;
 }
 
-/* Tables */
+/* ==========================================================================
+   Tables - Premium Data Grids
+   ========================================================================== */
 .table-container {
   width: 100%;
   overflow-x: auto;
   border-radius: var(--radius-md);
   border: 1px solid var(--border-subtle);
   background: var(--bg-surface);
+  box-shadow: var(--shadow-sm);
 }
 
 .erp-table {
@@ -392,18 +545,25 @@ a:hover {
 
 .erp-table th {
   background: var(--bg-surface-subtle);
-  padding: 0.75rem 1rem;
-  font-weight: 600;
-  color: var(--text-secondary);
-  border-bottom: 1px solid var(--border-subtle);
+  padding: 0.85rem 1rem;
+  font-weight: 700;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  border-bottom: 2px solid var(--border-subtle);
   white-space: nowrap;
+  position: sticky;
+  top: 0;
+  z-index: 2;
 }
 
 .erp-table td {
-  padding: 0.875rem 1rem;
+  padding: 0.9rem 1rem;
   border-bottom: 1px solid var(--border-subtle);
   color: var(--text-primary);
   vertical-align: middle;
+  transition: background-color var(--transition-fast);
 }
 
 .erp-table tr:last-child td {
@@ -411,10 +571,12 @@ a:hover {
 }
 
 .erp-table tr:hover td {
-  background: var(--bg-surface-subtle);
+  background: var(--role-badge-bg);
 }
 
-/* Progress Bar */
+/* ==========================================================================
+   Progress Bar - Animated Fills
+   ========================================================================== */
 .progress-bar-container {
   width: 100%;
   height: 8px;
@@ -427,72 +589,178 @@ a:hover {
 .progress-bar-fill {
   height: 100%;
   border-radius: var(--radius-full);
-  transition: width 0.6s cubic-bezier(0.4, 0, 0.2, 1);
-  background: linear-gradient(90deg, var(--primary) 0%, var(--secondary) 100%);
+  transition: width 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+  background: var(--role-gradient);
+  position: relative;
 }
 
-.progress-bar-fill.success {
-  background: linear-gradient(90deg, #10b981 0%, #059669 100%);
+.progress-bar-fill::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(90deg, transparent 0%, rgba(255, 255, 255, 0.3) 50%, transparent 100%);
+  animation: shimmerProgress 2s infinite;
 }
 
-.progress-bar-fill.warning {
-  background: linear-gradient(90deg, #f59e0b 0%, #d97706 100%);
+@keyframes shimmerProgress {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
 }
 
-.progress-bar-fill.danger {
-  background: linear-gradient(90deg, #ef4444 0%, #dc2626 100%);
-}
+.progress-bar-fill.success { background: linear-gradient(90deg, #10b981 0%, #34d399 100%); }
+.progress-bar-fill.warning { background: linear-gradient(90deg, #f59e0b 0%, #fbbf24 100%); }
+.progress-bar-fill.danger { background: linear-gradient(90deg, #ef4444 0%, #f87171 100%); }
 
-/* Modal Dialog */
+/* ==========================================================================
+   Modal Dialog - Premium Slide-in
+   ========================================================================== */
 .modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.6);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(8px) saturate(1.2);
+  -webkit-backdrop-filter: blur(8px) saturate(1.2);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 1000;
   padding: 1.5rem;
-  animation: fadeIn 0.2s ease-out;
+  animation: fadeIn 0.25s ease-out;
 }
 
 .modal-content {
   background: var(--bg-surface);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-xl);
+  box-shadow: var(--shadow-float);
   width: 100%;
   max-width: 650px;
   max-height: 90vh;
   overflow-y: auto;
   padding: 2rem;
   position: relative;
-  animation: slideUp 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  animation: modalSlideUp 0.35s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-/* Animations */
+/* ==========================================================================
+   Animations - Premium Motion System
+   ========================================================================== */
 @keyframes fadeIn {
   from { opacity: 0; }
   to { opacity: 1; }
 }
 
 @keyframes slideUp {
-  from { opacity: 0; transform: translateY(16px) scale(0.98); }
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes modalSlideUp {
+  from { opacity: 0; transform: translateY(24px) scale(0.96); }
   to { opacity: 1; transform: translateY(0) scale(1); }
 }
 
 @keyframes pulseGlow {
-  0%, 100% { box-shadow: 0 0 15px rgba(79, 70, 229, 0.2); }
-  50% { box-shadow: 0 0 30px rgba(79, 70, 229, 0.45); }
+  0%, 100% { box-shadow: 0 0 15px var(--role-accent-glow); }
+  50% { box-shadow: 0 0 35px var(--role-accent-glow); }
 }
 
-.animate-pulse-glow {
-  animation: pulseGlow 2.5s infinite;
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 
-/* Custom Scrollbar */
+/* Staggered card entrance */
+@keyframes cardEntrance {
+  from { 
+    opacity: 0; 
+    transform: translateY(16px) scale(0.98); 
+  }
+  to { 
+    opacity: 1; 
+    transform: translateY(0) scale(1); 
+  }
+}
+
+@keyframes slideInLeft {
+  from { opacity: 0; transform: translateX(-20px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes slideInRight {
+  from { opacity: 0; transform: translateX(20px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes scaleIn {
+  from { opacity: 0; transform: scale(0.9); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes countUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes gradientShift {
+  0%, 100% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+}
+
+@keyframes borderGlow {
+  0%, 100% { border-color: var(--border-subtle); }
+  50% { border-color: var(--role-accent); }
+}
+
+/* Page / View transition */
+@keyframes viewFadeIn {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Animation utility classes */
+.animate-pulse-glow { animation: pulseGlow 2.5s infinite; }
+.animate-card-in { animation: cardEntrance 0.4s var(--transition-smooth) backwards; }
+.animate-slide-up { animation: slideUp 0.4s var(--transition-smooth) backwards; }
+.animate-slide-left { animation: slideInLeft 0.35s var(--transition-smooth) backwards; }
+.animate-slide-right { animation: slideInRight 0.35s var(--transition-smooth) backwards; }
+.animate-scale-in { animation: scaleIn 0.3s var(--transition-smooth) backwards; }
+.animate-view-in { animation: viewFadeIn 0.35s cubic-bezier(0.16, 1, 0.3, 1) backwards; }
+
+/* Staggered entrance delays */
+.stagger-1 { animation-delay: 0.05s; }
+.stagger-2 { animation-delay: 0.1s; }
+.stagger-3 { animation-delay: 0.15s; }
+.stagger-4 { animation-delay: 0.2s; }
+.stagger-5 { animation-delay: 0.25s; }
+.stagger-6 { animation-delay: 0.3s; }
+.stagger-7 { animation-delay: 0.35s; }
+.stagger-8 { animation-delay: 0.4s; }
+
+/* ==========================================================================
+   Loading Skeleton Shimmer
+   ========================================================================== */
+.skeleton {
+  background: linear-gradient(90deg, 
+    var(--bg-surface-subtle) 25%, 
+    var(--border-subtle) 50%, 
+    var(--bg-surface-subtle) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+  border-radius: var(--radius-sm);
+}
+
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* ==========================================================================
+   Custom Scrollbar - Sleek & Minimal
+   ========================================================================== */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -503,7 +771,48 @@ a:hover {
 ::-webkit-scrollbar-thumb {
   background: var(--border-strong);
   border-radius: 9999px;
+  transition: background 0.2s;
 }
 ::-webkit-scrollbar-thumb:hover {
   background: var(--text-muted);
+}
+
+/* ==========================================================================
+   Utility Classes
+   ========================================================================== */
+.text-gradient {
+  background: var(--role-gradient);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.hover-lift {
+  transition: transform var(--transition-normal), box-shadow var(--transition-normal);
+}
+
+.hover-lift:hover {
+  transform: translateY(-4px);
+  box-shadow: var(--shadow-lg);
+}
+
+.hover-glow {
+  transition: box-shadow var(--transition-normal), border-color var(--transition-normal);
+}
+
+.hover-glow:hover {
+  box-shadow: var(--shadow-glow);
+  border-color: var(--border-glow);
+}
+
+/* Focus-visible ring */
+:focus-visible {
+  outline: 2px solid var(--role-accent);
+  outline-offset: 2px;
+}
+
+/* Selection */
+::selection {
+  background: var(--role-accent-glow);
+  color: var(--text-primary);
 }

@@ -20,6 +20,7 @@ const libraryHostelRoutes = require('./routes/library_hostel');
 const placementRoutes = require('./routes/placements');
 const engagementRoutes = require('./routes/engagement');
 const dashboardRoutes = require('./routes/dashboard');
+const settingsRoutes = require('./routes/settings');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -59,6 +60,7 @@ app.use('/api/library', libraryHostelRoutes);
 app.use('/api/placements', placementRoutes);
 app.use('/api/engagement', engagementRoutes);
 app.use('/api/dashboard', dashboardRoutes);
+app.use('/api/settings', settingsRoutes);
 
 // Error handling fallback
 app.use((err, req, res, next) => {

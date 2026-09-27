@@ -1,32 +1,51 @@
 const express = require('express');
 const db = require('../db/database');
-const { verifyToken, requireRoles } = require('../middleware/authMiddleware');
+const { verifyToken, requirePermission, requireRoles, logAudit } = require('../middleware/authMiddleware');
 
 const router = express.Router();
 
 // GET /api/attendance/summary - Student attendance summary with 75% threshold analysis
-router.get('/summary', verifyToken, (req, res) => {
-  let studentId = req.query.studentId;
+router.get('/summary', verifyToken, requirePermission('attendance', 'read'), (req, res) => {
+  let studentId = req.query.studentId || req.query.wardId;
 
-  // If student is logged in, use their own id
+  // DB-LEVEL SCOPING
   if (req.user.role === 'student') {
-    const student = db.prepare('SELECT id FROM students WHERE user_id = ?').get(req.user.id);
-    if (!student) return res.status(404).json({ error: 'Student record not found' });
-    studentId = student.id;
+    if (!req.student) return res.status(404).json({ error: 'Student record not found' });
+    studentId = req.student.id; // Force own ID
   } else if (req.user.role === 'parent') {
-    const ward = db.prepare('SELECT id FROM students WHERE parent_user_id = ?').get(req.user.id);
-    if (!ward) return res.status(404).json({ error: 'Ward record not found' });
-    studentId = ward.id;
+    if (studentId) {
+      // Verify ward belongs to this parent
+      const isWard = db.prepare('SELECT 1 FROM ward_links WHERE parent_user_id = ? AND student_id = ?').get(req.user.id, studentId);
+      if (!isWard) {
+        return res.status(403).json({ error: 'Access denied: You can only view attendance for your linked wards.' });
+      }
+    } else {
+      // Default to first linked ward
+      const firstWard = db.prepare('SELECT student_id FROM ward_links WHERE parent_user_id = ? ORDER BY is_primary DESC LIMIT 1').get(req.user.id);
+      if (!firstWard) return res.status(404).json({ error: 'No linked wards found for this parent.' });
+      studentId = firstWard.student_id;
+    }
   }
 
   if (!studentId) {
     return res.status(400).json({ error: 'Student ID required' });
   }
 
-  // Get all registered subjects for this student's semester
-  const student = db.prepare('SELECT * FROM students WHERE id = ?').get(studentId);
+  // Get student details
+  const student = db.prepare(`
+    SELECT s.*, u.full_name as student_name
+    FROM students s
+    JOIN users u ON s.user_id = u.id
+    WHERE s.id = ?
+  `).get(studentId);
+
   if (!student) return res.status(404).json({ error: 'Student not found' });
 
+  // Get institutional threshold (default 75.0%)
+  const thresholdSetting = db.prepare("SELECT setting_value FROM institution_settings WHERE setting_key = 'attendance_threshold'").get();
+  const threshold = thresholdSetting ? parseFloat(thresholdSetting.setting_value) : 75.0;
+
+  // Get subjects for this student's semester
   const subjects = db.prepare(`
     SELECT s.id, s.code, s.name, s.credits, s.type, s.difficulty_index,
            u.full_name as faculty_name
@@ -59,17 +78,14 @@ router.get('/summary', verifyToken, (req, res) => {
     overallTotal += total;
     overallAttended += attended;
 
-    // Calculate how many more classes needed to reach 75% if below
-    // Formula: (attended + X) / (total + X) >= 0.75  =>  attended + X >= 0.75 * total + 0.75 * X
-    // 0.25 * X >= 0.75 * total - attended  =>  X >= (0.75 * total - attended) / 0.25
-    let classesToReach75 = 0;
+    let classesToReachThreshold = 0;
     let safeToBunk = 0;
 
-    if (pct < 75.0 && total > 0) {
-      classesToReach75 = Math.max(0, Math.ceil((0.75 * total - attended) / 0.25));
-    } else if (pct >= 75.0 && total > 0) {
-      // Safe classes can miss: attended / (total + Y) >= 0.75 => Y <= (attended / 0.75) - total
-      safeToBunk = Math.max(0, Math.floor((attended / 0.75) - total));
+    const thresholdDec = threshold / 100.0;
+    if (pct < threshold && total > 0) {
+      classesToReachThreshold = Math.max(0, Math.ceil((thresholdDec * total - attended) / (1.0 - thresholdDec)));
+    } else if (pct >= threshold && total > 0) {
+      safeToBunk = Math.max(0, Math.floor((attended / thresholdDec) - total));
     }
 
     return {
@@ -83,8 +99,8 @@ router.get('/summary', verifyToken, (req, res) => {
       late_count: records.late_count || 0,
       absent_count: records.absent_count || 0,
       attendance_percentage: pct,
-      is_below_threshold: pct < 75.0,
-      classes_needed_for_75: classesToReach75,
+      is_below_threshold: pct < threshold,
+      classes_needed_for_75: classesToReachThreshold,
       safe_leaves_allowed: safeToBunk
     };
   });
@@ -93,29 +109,32 @@ router.get('/summary', verifyToken, (req, res) => {
 
   res.json({
     student_id: student.id,
-    student_name: student.full_name,
+    student_name: student.student_name,
     overall_percentage: overallPercentage,
-    is_at_risk: overallPercentage < 75.0,
-    threshold: 75.0,
+    is_at_risk: overallPercentage < threshold,
+    threshold: threshold,
     total_conducted: overallTotal,
     total_attended: overallAttended,
     subjects: subjectBreakdown
   });
 });
 
-// GET /api/attendance/trends - Attendance trend graph data
-router.get('/trends', verifyToken, (req, res) => {
-  let studentId = req.query.studentId;
+// GET /api/attendance/trends - Attendance trend graph data with scoping
+router.get('/trends', verifyToken, requirePermission('attendance', 'read'), (req, res) => {
+  let studentId = req.query.studentId || req.query.wardId;
 
   if (req.user.role === 'student') {
-    const student = db.prepare('SELECT id FROM students WHERE user_id = ?').get(req.user.id);
-    studentId = student ? student.id : null;
+    studentId = req.student ? req.student.id : null;
   } else if (req.user.role === 'parent') {
-    const ward = db.prepare('SELECT id FROM students WHERE parent_user_id = ?').get(req.user.id);
-    studentId = ward ? ward.id : null;
+    if (studentId) {
+      const isWard = db.prepare('SELECT 1 FROM ward_links WHERE parent_user_id = ? AND student_id = ?').get(req.user.id, studentId);
+      if (!isWard) return res.status(403).json({ error: 'Access denied to this ward.' });
+    } else {
+      const firstWard = db.prepare('SELECT student_id FROM ward_links WHERE parent_user_id = ? ORDER BY is_primary DESC LIMIT 1').get(req.user.id);
+      studentId = firstWard ? firstWard.student_id : null;
+    }
   }
 
-  // Group attendance by session date / week
   const sessions = db.prepare(`
     SELECT sess.session_date,
            COUNT(ar.id) as total_students,
@@ -145,14 +164,26 @@ router.get('/trends', verifyToken, (req, res) => {
   res.json(formattedTrends);
 });
 
-// POST /api/attendance/create-session - Faculty creates daily session (with dynamic QR token)
-router.post('/create-session', verifyToken, requireRoles('faculty', 'admin'), (req, res) => {
+// POST /api/attendance/create-session - Faculty creates daily session (with dynamic QR token & DB Scoping)
+router.post('/create-session', verifyToken, requirePermission('attendance', 'create'), (req, res) => {
   const { subjectId, section, semester, topicCovered, durationMinutes } = req.body;
 
   let facultyId = null;
   if (req.user.role === 'faculty') {
-    const fac = db.prepare('SELECT id FROM faculty WHERE user_id = ?').get(req.user.id);
-    facultyId = fac ? fac.id : 1;
+    if (!req.faculty) return res.status(403).json({ error: 'Faculty profile not found' });
+    facultyId = req.faculty.id;
+
+    // DB SCOPING: Verify faculty is mapped to this subject and class
+    const isMapped = db.prepare(`
+      SELECT 1 FROM faculty_class_map
+      WHERE faculty_id = ? AND subject_id = ? AND semester = ? AND section = ?
+    `).get(facultyId, subjectId, semester, section);
+
+    if (!isMapped) {
+      return res.status(403).json({
+        error: `Forbidden: You are not assigned to teach subject ID ${subjectId} in Semester ${semester} (${section}).`
+      });
+    }
   } else {
     facultyId = req.body.facultyId || 1;
   }
@@ -189,12 +220,24 @@ router.post('/create-session', verifyToken, requireRoles('faculty', 'admin'), (r
   });
 });
 
-// POST /api/attendance/bulk-mark - Faculty one-tap bulk attendance marking
-router.post('/bulk-mark', verifyToken, requireRoles('faculty', 'admin'), (req, res) => {
-  const { sessionId, records } = req.body; // records: [{ studentId, status: 'Present' | 'Absent' | 'Late' }]
+// POST /api/attendance/bulk-mark - Faculty one-tap bulk attendance marking (scoped)
+router.post('/bulk-mark', verifyToken, requirePermission('attendance', 'update'), (req, res) => {
+  const { sessionId, records } = req.body;
 
   if (!sessionId || !Array.isArray(records)) {
     return res.status(400).json({ error: 'Session ID and student records array required' });
+  }
+
+  const session = db.prepare('SELECT * FROM attendance_sessions WHERE id = ?').get(sessionId);
+  if (!session) {
+    return res.status(404).json({ error: 'Session not found' });
+  }
+
+  // DB scoping check for faculty
+  if (req.user.role === 'faculty') {
+    if (session.faculty_id !== req.faculty?.id) {
+      return res.status(403).json({ error: 'Access denied: You can only mark attendance for sessions you created.' });
+    }
   }
 
   const upsert = db.prepare(`
@@ -213,42 +256,57 @@ router.post('/bulk-mark', verifyToken, requireRoles('faculty', 'admin'), (req, r
 
   markMany(records);
 
-  // Check if any student just breached <75% and trigger alerts
-  for (const r of records) {
-    const attStats = db.prepare(`
-      SELECT 
-        COUNT(*) as total,
-        SUM(CASE WHEN status = 'Present' THEN 1 ELSE 0 END) as present,
-        SUM(CASE WHEN status = 'Late' THEN 1 ELSE 0 END) as late
-      FROM attendance_records
-      WHERE student_id = ?
-    `).get(r.studentId);
+  res.json({ message: `Successfully updated attendance for ${records.length} students` });
+});
 
-    const total = attStats.total || 0;
-    const attended = (attStats.present || 0) + ((attStats.late || 0) * 0.5);
-    const pct = total > 0 ? (attended / total) * 100 : 100;
+// PUT /api/attendance/override - Admin override with mandatory audit log
+router.put('/override', verifyToken, requirePermission('attendance', 'override'), (req, res) => {
+  const { recordId, sessionId, studentId, status, reason } = req.body;
 
-    if (pct < 75.0 && total >= 5) {
-      const student = db.prepare('SELECT user_id, parent_user_id, roll_no FROM students WHERE id = ?').get(r.studentId);
-      if (student) {
-        // Send alert to student
-        db.prepare(`
-          INSERT INTO notifications (user_id, title, message, type, link_url)
-          VALUES (?, 'Low Attendance Warning', ?, 'attendance_alert', '/attendance')
-        `).run(student.user_id, `Your attendance has dropped to ${pct.toFixed(1)}%, which is below the mandatory 75% limit.`);
-
-        // Send alert to parent if linked
-        if (student.parent_user_id) {
-          db.prepare(`
-            INSERT INTO notifications (user_id, title, message, type, link_url)
-            VALUES (?, 'Ward Low Attendance Alert', ?, 'attendance_alert', '/attendance')
-          `).run(student.parent_user_id, `Attendance alert for Roll No ${student.roll_no}: current attendance is ${pct.toFixed(1)}% (Threshold: 75%).`);
-        }
-      }
-    }
+  if (!reason || reason.trim().length < 5) {
+    return res.status(400).json({ error: 'A valid mandatory reason (min 5 chars) is required for attendance override.' });
   }
 
-  res.json({ message: `Successfully updated attendance for ${records.length} students` });
+  let record = null;
+  if (recordId) {
+    record = db.prepare('SELECT * FROM attendance_records WHERE id = ?').get(recordId);
+  } else if (sessionId && studentId) {
+    record = db.prepare('SELECT * FROM attendance_records WHERE session_id = ? AND student_id = ?').get(sessionId, studentId);
+  }
+
+  if (!record) {
+    return res.status(404).json({ error: 'Attendance record not found' });
+  }
+
+  const oldStatus = record.status;
+  db.prepare(`
+    UPDATE attendance_records
+    SET status = ?,
+        method = 'Faculty_Manual',
+        marked_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(status, record.id);
+
+  // Mandatory Audit Log
+  logAudit({
+    userId: req.user.id,
+    userRole: req.user.role,
+    userEmail: req.user.email,
+    action: 'ATTENDANCE_OVERRIDE',
+    entityType: 'attendance_records',
+    entityId: record.id,
+    oldValue: { status: oldStatus },
+    newValue: { status: status },
+    reason: reason,
+    ipAddress: req.ip
+  });
+
+  res.json({
+    message: 'Attendance override successfully applied and recorded in institutional audit log.',
+    recordId: record.id,
+    previousStatus: oldStatus,
+    newStatus: status
+  });
 });
 
 // POST /api/attendance/qr-checkin - Student scans QR code or enters OTP
@@ -271,8 +329,7 @@ router.post('/qr-checkin', verifyToken, requireRoles('student'), (req, res) => {
     return res.status(400).json({ error: 'This QR attendance session has expired' });
   }
 
-  const student = db.prepare('SELECT id FROM students WHERE user_id = ?').get(req.user.id);
-  if (!student) {
+  if (!req.student) {
     return res.status(404).json({ error: 'Student record not found' });
   }
 
@@ -284,7 +341,7 @@ router.post('/qr-checkin', verifyToken, requireRoles('student'), (req, res) => {
         status = 'Present',
         method = 'QR_Scan',
         marked_at = CURRENT_TIMESTAMP
-    `).run(session.id, student.id);
+    `).run(session.id, req.student.id);
 
     res.json({
       message: 'Attendance recorded successfully via QR check-in!',
@@ -297,7 +354,7 @@ router.post('/qr-checkin', verifyToken, requireRoles('student'), (req, res) => {
 });
 
 // GET /api/attendance/export - Export attendance report
-router.get('/export', verifyToken, (req, res) => {
+router.get('/export', verifyToken, requirePermission('attendance', 'read'), (req, res) => {
   const { semester, section } = req.query;
 
   const data = db.prepare(`

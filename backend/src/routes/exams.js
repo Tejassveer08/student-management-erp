@@ -1,18 +1,18 @@
 const express = require('express');
 const db = require('../db/database');
-const { verifyToken, requireRoles } = require('../middleware/authMiddleware');
+const { verifyToken, requirePermission, logAudit } = require('../middleware/authMiddleware');
 const { marksToGradePoint } = require('../services/cgpaCalculator');
 
 const router = express.Router();
 
 // GET /api/exams - List all examinations
-router.get('/', verifyToken, (req, res) => {
+router.get('/', verifyToken, requirePermission('exams', 'read'), (req, res) => {
   const exams = db.prepare('SELECT * FROM examinations ORDER BY start_date DESC').all();
   res.json(exams);
 });
 
 // POST /api/exams - Schedule new exam (Admin only)
-router.post('/', verifyToken, requireRoles('admin'), (req, res) => {
+router.post('/', verifyToken, requirePermission('exams', 'create'), (req, res) => {
   const { name, semester, academicYear, examType, startDate, endDate } = req.body;
   if (!name || !semester || !examType || !startDate || !endDate) {
     return res.status(400).json({ error: 'All exam fields are required' });
@@ -23,16 +23,76 @@ router.post('/', verifyToken, requireRoles('admin'), (req, res) => {
     VALUES (?, ?, ?, ?, ?, ?, 'Scheduled')
   `).run(name, semester, academicYear || '2025-2026', examType, startDate, endDate);
 
+  logAudit({
+    userId: req.user.id,
+    userRole: req.user.role,
+    userEmail: req.user.email,
+    action: 'EXAM_SCHEDULE_CREATE',
+    entityType: 'examinations',
+    entityId: result.lastInsertRowid,
+    oldValue: null,
+    newValue: { name, semester, examType, startDate, endDate },
+    reason: 'New examination schedule creation',
+    ipAddress: req.ip
+  });
+
   res.status(201).json({ message: 'Exam scheduled successfully', examId: result.lastInsertRowid });
 });
 
-// GET /api/exams/marks - Fetch marks (by examId, subjectId, or studentId)
-router.get('/marks', verifyToken, (req, res) => {
-  const { examId, subjectId, studentId } = req.query;
+// POST /api/exams/:id/publish - Publish final examination results (Admin only)
+router.post('/:id/publish', verifyToken, requirePermission('exams', 'publish_results'), (req, res) => {
+  const exam = db.prepare('SELECT * FROM examinations WHERE id = ?').get(req.params.id);
+  if (!exam) {
+    return res.status(404).json({ error: 'Examination not found' });
+  }
+
+  db.prepare(`
+    UPDATE examinations
+    SET status = 'Results_Declared'
+    WHERE id = ?
+  `).run(req.params.id);
+
+  logAudit({
+    userId: req.user.id,
+    userRole: req.user.role,
+    userEmail: req.user.email,
+    action: 'EXAM_RESULTS_PUBLISH',
+    entityType: 'examinations',
+    entityId: req.params.id,
+    oldValue: { status: exam.status },
+    newValue: { status: 'Results_Declared' },
+    reason: 'Official release of semester examination results',
+    ipAddress: req.ip
+  });
+
+  res.json({
+    message: `Examination "${exam.name}" results officially declared and published!`,
+    examId: exam.id,
+    status: 'Results_Declared'
+  });
+});
+
+// GET /api/exams/marks - Fetch marks with DB scoping
+router.get('/marks', verifyToken, requirePermission('exams', 'read'), (req, res) => {
+  const { examId, subjectId } = req.query;
+  let studentId = req.query.studentId;
+
+  // DB scoping
+  if (req.user.role === 'student') {
+    studentId = req.student ? req.student.id : 0;
+  } else if (req.user.role === 'parent') {
+    if (studentId) {
+      const isWard = db.prepare('SELECT 1 FROM ward_links WHERE parent_user_id = ? AND student_id = ?').get(req.user.id, studentId);
+      if (!isWard) return res.status(403).json({ error: 'Access denied: Not your linked ward.' });
+    } else {
+      const firstWard = db.prepare('SELECT student_id FROM ward_links WHERE parent_user_id = ? ORDER BY is_primary DESC LIMIT 1').get(req.user.id);
+      studentId = firstWard ? firstWard.student_id : 0;
+    }
+  }
 
   let query = `
     SELECT em.*, sub.code as subject_code, sub.name as subject_name, sub.credits,
-           ex.name as exam_name, ex.exam_type,
+           ex.name as exam_name, ex.exam_type, ex.status as exam_status,
            s.roll_no, s.enrollment_no, u.full_name as student_name
     FROM exam_marks em
     JOIN subjects sub ON em.subject_id = sub.id
@@ -56,18 +116,38 @@ router.get('/marks', verifyToken, (req, res) => {
     params.push(Number(studentId));
   }
 
+  // If faculty, scope to their assigned classes/subjects
+  if (req.user.role === 'faculty') {
+    query += ` AND em.subject_id IN (SELECT subject_id FROM faculty_class_map WHERE faculty_id = ?)`;
+    params.push(req.faculty?.id || 0);
+  }
+
   query += ' ORDER BY s.roll_no ASC';
 
   const marks = db.prepare(query).all(...params);
   res.json(marks);
 });
 
-// POST /api/exams/marks - Faculty marks entry (Internal assessment, assignments, external)
-router.post('/marks', verifyToken, requireRoles('faculty', 'admin'), (req, res) => {
-  const { examId, subjectId, studentId, internalAssessment, assignmentScore, externalExam, remarks } = req.body;
+// POST /api/exams/marks - Faculty marks entry with DB Scoping (internal/assignments)
+router.post('/marks', verifyToken, requirePermission('exams', 'enter_marks'), (req, res) => {
+  const { examId, subjectId, studentId, internalAssessment, assignmentScore, externalExam, remarks, reason } = req.body;
 
   if (!examId || !subjectId || !studentId) {
     return res.status(400).json({ error: 'Exam ID, Subject ID, and Student ID are required' });
+  }
+
+  // DB scoping check for Faculty: must be assigned to this subject
+  if (req.user.role === 'faculty') {
+    const isMapped = db.prepare(`
+      SELECT 1 FROM faculty_class_map 
+      WHERE faculty_id = ? AND subject_id = ?
+    `).get(req.faculty?.id, subjectId);
+
+    if (!isMapped) {
+      return res.status(403).json({
+        error: 'Forbidden: You are not assigned to teach or evaluate this subject.'
+      });
+    }
   }
 
   const internal = Number(internalAssessment || 0);
@@ -78,6 +158,8 @@ router.post('/marks', verifyToken, requireRoles('faculty', 'admin'), (req, res) 
   const gradeInfo = marksToGradePoint(total);
 
   try {
+    const existing = db.prepare('SELECT * FROM exam_marks WHERE exam_id = ? AND subject_id = ? AND student_id = ?').get(examId, subjectId, studentId);
+
     db.prepare(`
       INSERT INTO exam_marks (
         exam_id, subject_id, student_id, internal_assessment, assignment_score, external_exam,
@@ -93,18 +175,24 @@ router.post('/marks', verifyToken, requireRoles('faculty', 'admin'), (req, res) 
         remarks = excluded.remarks
     `).run(examId, subjectId, studentId, internal, assignment, external, total, gradeInfo.grade, gradeInfo.gp, remarks || '');
 
-    // Notify student about new grade
-    const student = db.prepare('SELECT user_id, roll_no FROM students WHERE id = ?').get(studentId);
-    const subject = db.prepare('SELECT name, code FROM subjects WHERE id = ?').get(subjectId);
-    if (student && subject) {
-      db.prepare(`
-        INSERT INTO notifications (user_id, title, message, type, link_url)
-        VALUES (?, 'New Marks Posted', ?, 'exam_result', '/results')
-      `).run(student.user_id, `Marks for ${subject.code} - ${subject.name} have been updated. Total Score: ${total}/100 (Grade: ${gradeInfo.grade}).`);
+    // If Admin performed an override/moderation on an existing score, log audit
+    if (req.user.role === 'admin' && existing) {
+      logAudit({
+        userId: req.user.id,
+        userRole: req.user.role,
+        userEmail: req.user.email,
+        action: 'EXAM_MARKS_MODERATION',
+        entityType: 'exam_marks',
+        entityId: `${examId}_${subjectId}_${studentId}`,
+        oldValue: { internal: existing.internal_assessment, total: existing.total_score, grade: existing.letter_grade },
+        newValue: { internal, total, grade: gradeInfo.grade },
+        reason: reason || 'Administrative marks moderation',
+        ipAddress: req.ip
+      });
     }
 
     res.json({
-      message: 'Marks updated successfully',
+      message: 'Marks recorded successfully',
       total_score: total,
       letter_grade: gradeInfo.grade,
       grade_points: gradeInfo.gp
@@ -114,8 +202,22 @@ router.post('/marks', verifyToken, requireRoles('faculty', 'admin'), (req, res) 
   }
 });
 
-// GET /api/exams/report-card/:studentId - Full official marksheet report
-router.get('/report-card/:studentId', verifyToken, (req, res) => {
+// GET /api/exams/report-card/:studentId - Full official marksheet with DB scoping
+router.get('/report-card/:studentId', verifyToken, requirePermission('exams', 'read'), (req, res) => {
+  const targetStudentId = Number(req.params.studentId);
+
+  // DB scoping check
+  if (req.user.role === 'student') {
+    if (!req.student || req.student.id !== targetStudentId) {
+      return res.status(403).json({ error: 'Access denied: Students can only view their own marksheet.' });
+    }
+  } else if (req.user.role === 'parent') {
+    const isWard = db.prepare('SELECT 1 FROM ward_links WHERE parent_user_id = ? AND student_id = ?').get(req.user.id, targetStudentId);
+    if (!isWard) {
+      return res.status(403).json({ error: 'Access denied: You can only view marksheets of your linked wards.' });
+    }
+  }
+
   const student = db.prepare(`
     SELECT s.*, u.full_name as student_name, u.email as student_email,
            c.name as course_name, c.code as course_code,
@@ -125,7 +227,7 @@ router.get('/report-card/:studentId', verifyToken, (req, res) => {
     JOIN courses c ON s.course_id = c.id
     JOIN departments d ON s.department_id = d.id
     WHERE s.id = ?
-  `).get(req.params.studentId);
+  `).get(targetStudentId);
 
   if (!student) {
     return res.status(404).json({ error: 'Student not found' });

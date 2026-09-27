@@ -1,11 +1,11 @@
 const express = require('express');
 const db = require('../db/database');
-const { verifyToken } = require('../middleware/authMiddleware');
+const { verifyToken, requirePermission, requireRoles, logAudit } = require('../middleware/authMiddleware');
 
 const router = express.Router();
 
-// GET /api/fees/structures - Fee structures
-router.get('/structures', verifyToken, (req, res) => {
+// GET /api/fees/structures - Fee structures catalog
+router.get('/structures', verifyToken, requirePermission('fees', 'read'), (req, res) => {
   const structures = db.prepare(`
     SELECT fs.*, c.name as course_name, c.code as course_code
     FROM fee_structures fs
@@ -15,17 +15,30 @@ router.get('/structures', verifyToken, (req, res) => {
   res.json(structures);
 });
 
-// GET /api/fees/student/:studentId - Get fees status for a student
-router.get('/student/:studentId', verifyToken, (req, res) => {
+// GET /api/fees/student/:studentId - Get fees status for a student (with DB Scoping)
+router.get('/student/:studentId', verifyToken, requirePermission('fees', 'read'), (req, res) => {
   let targetId = req.params.studentId;
 
   if (targetId === 'me') {
     if (req.user.role === 'student') {
-      const st = db.prepare('SELECT id FROM students WHERE user_id = ?').get(req.user.id);
-      targetId = st ? st.id : null;
+      targetId = req.student ? req.student.id : null;
     } else if (req.user.role === 'parent') {
-      const ward = db.prepare('SELECT id FROM students WHERE parent_user_id = ?').get(req.user.id);
-      targetId = ward ? ward.id : null;
+      const firstWard = db.prepare('SELECT student_id FROM ward_links WHERE parent_user_id = ? ORDER BY is_primary DESC LIMIT 1').get(req.user.id);
+      targetId = firstWard ? firstWard.student_id : null;
+    }
+  } else {
+    targetId = Number(targetId);
+  }
+
+  // DB SCOPING
+  if (req.user.role === 'student') {
+    if (!req.student || req.student.id !== targetId) {
+      return res.status(403).json({ error: 'Access denied: Students can only view their own fee ledgers.' });
+    }
+  } else if (req.user.role === 'parent') {
+    const isWard = db.prepare('SELECT 1 FROM ward_links WHERE parent_user_id = ? AND student_id = ?').get(req.user.id, targetId);
+    if (!isWard) {
+      return res.status(403).json({ error: 'Access denied: You can only view fee records of your linked wards.' });
     }
   }
 
@@ -47,7 +60,7 @@ router.get('/student/:studentId', verifyToken, (req, res) => {
 });
 
 // POST /api/fees/checkout-session - Initiates "Redirect to payment page" checkout session
-router.post('/checkout-session', verifyToken, (req, res) => {
+router.post('/checkout-session', verifyToken, requirePermission('fees', 'pay'), (req, res) => {
   const { paymentId } = req.body;
   if (!paymentId) return res.status(400).json({ error: 'Payment ID is required' });
 
@@ -63,9 +76,15 @@ router.post('/checkout-session', verifyToken, (req, res) => {
 
   if (!payment) return res.status(404).json({ error: 'Fee payment record not found' });
 
-  const totalPayable = payment.amount_due + (payment.fine_amount || 0);
+  // If Parent, verify ward link
+  if (req.user.role === 'parent') {
+    const isWard = db.prepare('SELECT 1 FROM ward_links WHERE parent_user_id = ? AND student_id = ?').get(req.user.id, payment.student_id);
+    if (!isWard) {
+      return res.status(403).json({ error: 'Access denied: Cannot pay fees for an unlinked student.' });
+    }
+  }
 
-  // Generate a mock gateway checkout token
+  const totalPayable = payment.amount_due + (payment.fine_amount || 0);
   const checkoutSessionId = `PAY_SESS_${Date.now()}_${Math.random().toString(36).substring(2, 9).toUpperCase()}`;
 
   res.json({
@@ -81,14 +100,22 @@ router.post('/checkout-session', verifyToken, (req, res) => {
   });
 });
 
-// POST /api/fees/pay - Process simulated payment & generate official digital receipt
-router.post('/pay', verifyToken, (req, res) => {
+// POST /api/fees/pay - Process simulated payment & generate digital receipt (Parent & Admin)
+router.post('/pay', verifyToken, requirePermission('fees', 'pay'), (req, res) => {
   const { paymentId, paymentMethod, transactionRef } = req.body;
 
   if (!paymentId) return res.status(400).json({ error: 'Payment ID is required' });
 
   const payment = db.prepare('SELECT * FROM student_fee_payments WHERE id = ?').get(paymentId);
   if (!payment) return res.status(404).json({ error: 'Fee record not found' });
+
+  // DB scoping check for Parent
+  if (req.user.role === 'parent') {
+    const isWard = db.prepare('SELECT 1 FROM ward_links WHERE parent_user_id = ? AND student_id = ?').get(req.user.id, payment.student_id);
+    if (!isWard) {
+      return res.status(403).json({ error: 'Access denied: You cannot process payments for students outside your ward links.' });
+    }
+  }
 
   const receiptNo = `REC-GTB-2026-${Math.floor(1000 + Math.random() * 9000)}`;
   const txnId = transactionRef || `TXN_GTB_${Date.now()}_${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
@@ -105,7 +132,7 @@ router.post('/pay', verifyToken, (req, res) => {
     WHERE id = ?
   `).run(totalPaid, paymentMethod || 'UPI / QR', txnId, receiptNo, paymentId);
 
-  // Send confirmation notification
+  // Send confirmation notifications
   const student = db.prepare('SELECT user_id, parent_user_id, roll_no FROM students WHERE id = ?').get(payment.student_id);
   if (student) {
     db.prepare(`
@@ -130,8 +157,47 @@ router.post('/pay', verifyToken, (req, res) => {
   });
 });
 
+// PUT /api/fees/override - Admin Fee & Fine Waiver Override (with audit log)
+router.put('/override', verifyToken, requirePermission('fees', 'override'), (req, res) => {
+  const { paymentId, fineAmount, amountDue, status, reason } = req.body;
+
+  if (!paymentId) return res.status(400).json({ error: 'Payment ID is required' });
+  if (!reason || reason.trim().length < 5) {
+    return res.status(400).json({ error: 'A mandatory reason (min 5 chars) is required for administrative fee override.' });
+  }
+
+  const existing = db.prepare('SELECT * FROM student_fee_payments WHERE id = ?').get(paymentId);
+  if (!existing) return res.status(404).json({ error: 'Fee payment record not found' });
+
+  db.prepare(`
+    UPDATE student_fee_payments
+    SET fine_amount = COALESCE(?, fine_amount),
+        amount_due = COALESCE(?, amount_due),
+        status = COALESCE(?, status)
+    WHERE id = ?
+  `).run(fineAmount, amountDue, status, paymentId);
+
+  logAudit({
+    userId: req.user.id,
+    userRole: req.user.role,
+    userEmail: req.user.email,
+    action: 'FEE_OVERRIDE_MODERATION',
+    entityType: 'student_fee_payments',
+    entityId: paymentId,
+    oldValue: { fine: existing.fine_amount, amountDue: existing.amount_due, status: existing.status },
+    newValue: { fine: fineAmount, amountDue, status },
+    reason: reason,
+    ipAddress: req.ip
+  });
+
+  res.json({
+    message: 'Fee override applied successfully and recorded in audit log.',
+    paymentId
+  });
+});
+
 // GET /api/fees/receipt/:receiptNo - Official printable digital receipt
-router.get('/receipt/:receiptNo', verifyToken, (req, res) => {
+router.get('/receipt/:receiptNo', verifyToken, requirePermission('fees', 'read'), (req, res) => {
   const receipt = db.prepare(`
     SELECT sfp.*, fs.semester, fs.academic_year,
            fs.tuition_fee, fs.lab_development_fee, fs.exam_fee, fs.library_sports_fee,
@@ -147,6 +213,18 @@ router.get('/receipt/:receiptNo', verifyToken, (req, res) => {
 
   if (!receipt) return res.status(404).json({ error: 'Receipt not found' });
 
+  // DB scoping check
+  if (req.user.role === 'student') {
+    if (!req.student || req.student.id !== receipt.student_id) {
+      return res.status(403).json({ error: 'Access denied: Cannot view another student receipt.' });
+    }
+  } else if (req.user.role === 'parent') {
+    const isWard = db.prepare('SELECT 1 FROM ward_links WHERE parent_user_id = ? AND student_id = ?').get(req.user.id, receipt.student_id);
+    if (!isWard) {
+      return res.status(403).json({ error: 'Access denied: Cannot view receipt of non-ward.' });
+    }
+  }
+
   res.json({
     institution: {
       name: 'Guru Tegh Bahadur Institute of Technology (GTBIT)',
@@ -158,8 +236,8 @@ router.get('/receipt/:receiptNo', verifyToken, (req, res) => {
   });
 });
 
-// GET /api/fees/financial-overview - Consolidated financial stats for Admin
-router.get('/financial-overview', verifyToken, (req, res) => {
+// GET /api/fees/financial-overview - Consolidated financial stats (Admin only)
+router.get('/financial-overview', verifyToken, requireRoles('admin'), (req, res) => {
   const stats = db.prepare(`
     SELECT 
       COUNT(*) as total_invoices,

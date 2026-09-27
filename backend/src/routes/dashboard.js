@@ -21,7 +21,7 @@ router.get('/summary', verifyToken, (req, res) => {
       FROM student_fee_payments
     `).get();
 
-    // Overall attendance rate across institution
+    // Institutional attendance rate
     const att = db.prepare(`
       SELECT 
         COUNT(*) as total,
@@ -31,10 +31,26 @@ router.get('/summary', verifyToken, (req, res) => {
 
     const overallAttPct = att.total > 0 ? Number(((att.present / att.total) * 100).toFixed(1)) : 88.0;
 
-    // Recent active notices
-    const recentNotices = db.prepare('SELECT * FROM notices ORDER BY is_pinned DESC, created_at DESC LIMIT 4').all();
+    // Count at-risk students below threshold
+    const atRiskCount = db.prepare(`
+      SELECT COUNT(DISTINCT ar.student_id) as count
+      FROM attendance_records ar
+      GROUP BY ar.student_id
+      HAVING (SUM(CASE WHEN ar.status = 'Present' THEN 1 ELSE 0 END) * 1.0 / COUNT(ar.id)) < 0.75
+    `).all().length || 1;
 
-    // Upcoming exams
+    // Recent audit logs for Admin governance widget
+    const recentAuditLogs = db.prepare(`
+      SELECT * FROM audit_logs
+      ORDER BY created_at DESC
+      LIMIT 5
+    `).all();
+
+    // Institutional settings
+    const thresholdSetting = db.prepare("SELECT setting_value FROM institution_settings WHERE setting_key = 'attendance_threshold'").get();
+    const threshold = thresholdSetting ? parseFloat(thresholdSetting.setting_value) : 75.0;
+
+    const recentNotices = db.prepare('SELECT * FROM notices ORDER BY is_pinned DESC, created_at DESC LIMIT 4').all();
     const exams = db.prepare('SELECT * FROM examinations ORDER BY start_date ASC LIMIT 3').all();
 
     return res.json({
@@ -48,21 +64,24 @@ router.get('/summary', verifyToken, (req, res) => {
         total_fees_collected: fees.total_collected || 0,
         total_fees_demand: fees.total_demand || 0,
         average_attendance: overallAttPct,
-        at_risk_students_count: 1
+        at_risk_students_count: atRiskCount,
+        regulatory_threshold: threshold
       },
+      recent_audit_logs: recentAuditLogs,
       recent_notices: recentNotices,
       examinations: exams
     });
   }
 
   if (role === 'faculty') {
-    const fac = db.prepare('SELECT * FROM faculty WHERE user_id = ?').get(req.user.id) || { id: 1 };
+    const fac = req.faculty || db.prepare('SELECT * FROM faculty WHERE user_id = ?').get(req.user.id) || { id: 1 };
 
-    const subjects = db.prepare(`
-      SELECT s.*, c.name as course_name
-      FROM subjects s
-      JOIN courses c ON s.course_id = c.id
-      WHERE s.faculty_id = ?
+    // Assigned classes and subjects from faculty_class_map
+    const mappedClasses = db.prepare(`
+      SELECT fcm.*, s.name as subject_name, s.code as subject_code, s.credits
+      FROM faculty_class_map fcm
+      JOIN subjects s ON fcm.subject_id = s.id
+      WHERE fcm.faculty_id = ?
     `).all(fac.id);
 
     // Today's classes
@@ -86,25 +105,49 @@ router.get('/summary', verifyToken, (req, res) => {
       WHERE a.faculty_id = ? AND asub.status = 'Submitted'
     `).get(fac.id);
 
+    // Low-attendance students in faculty's sections
+    const atRiskStudentsInSections = db.prepare(`
+      SELECT s.id, s.roll_no, u.full_name as student_name, s.section, s.semester,
+             COUNT(ar.id) as total_sessions,
+             SUM(CASE WHEN ar.status = 'Present' THEN 1 ELSE 0 END) as present_count
+      FROM students s
+      JOIN users u ON s.user_id = u.id
+      JOIN attendance_records ar ON s.id = ar.student_id
+      JOIN attendance_sessions sess ON ar.session_id = sess.id
+      WHERE sess.faculty_id = ?
+      GROUP BY s.id
+      HAVING (present_count * 1.0 / total_sessions) < 0.75
+    `).all(fac.id);
+
+    const formattedAtRisk = atRiskStudentsInSections.map(st => {
+      const pct = st.total_sessions > 0 ? Number(((st.present_count / st.total_sessions) * 100).toFixed(1)) : 100;
+      return {
+        ...st,
+        attendance_pct: pct
+      };
+    });
+
     const recentNotices = db.prepare('SELECT * FROM notices ORDER BY is_pinned DESC, created_at DESC LIMIT 3').all();
 
     return res.json({
       role: 'faculty',
       faculty_profile: fac,
       stats: {
-        assigned_subjects_count: subjects.length,
+        assigned_subjects_count: mappedClasses.length,
         today_classes_count: todaySlots.length,
         pending_grading: pendingGradingCount ? pendingGradingCount.count : 0,
-        weekly_workload: fac.weekly_workload_hours || 16
+        weekly_workload: fac.weekly_workload_hours || 16,
+        at_risk_students_count: formattedAtRisk.length
       },
-      assigned_subjects: subjects,
+      assigned_classes: mappedClasses,
       today_schedule: todaySlots,
+      at_risk_students: formattedAtRisk,
       recent_notices: recentNotices
     });
   }
 
   if (role === 'student') {
-    const st = db.prepare('SELECT * FROM students WHERE user_id = ?').get(req.user.id) || { id: 1, current_cgpa: 8.78, semester: 4 };
+    const st = req.student || db.prepare('SELECT * FROM students WHERE user_id = ?').get(req.user.id) || { id: 1, current_cgpa: 8.78, semester: 4 };
 
     // Attendance stats
     const attRec = db.prepare(`
@@ -116,8 +159,8 @@ router.get('/summary', verifyToken, (req, res) => {
       WHERE ar.student_id = ?
     `).get(st.id);
 
-    const total = attRec.total || 0;
-    const attended = (attRec.present || 0) + ((attRec.late || 0) * 0.5);
+    const total = attRec ? attRec.total : 0;
+    const attended = (attRec ? attRec.present : 0) + ((attRec ? attRec.late : 0) * 0.5);
     const attPct = total > 0 ? Number(((attended / total) * 100).toFixed(1)) : 90.0;
 
     // Merit points
@@ -163,23 +206,40 @@ router.get('/summary', verifyToken, (req, res) => {
   }
 
   if (role === 'parent') {
-    const ward = db.prepare(`
-      SELECT s.*, u.full_name as student_name, u.avatar_url,
+    // Multi-ward lookup via ward_links
+    const linkedWards = db.prepare(`
+      SELECT wl.student_id, wl.relationship, wl.is_primary,
+             s.roll_no, s.enrollment_no, s.semester, s.section, s.current_cgpa,
+             u.full_name as student_name, u.avatar_url,
              c.name as course_name, d.name as department_name
-      FROM students s
+      FROM ward_links wl
+      JOIN students s ON wl.student_id = s.id
       JOIN users u ON s.user_id = u.id
       JOIN courses c ON s.course_id = c.id
       JOIN departments d ON s.department_id = d.id
-      WHERE s.parent_user_id = ?
-    `).get(req.user.id) || db.prepare(`
-      SELECT s.*, u.full_name as student_name, u.avatar_url,
-             c.name as course_name, d.name as department_name
-      FROM students s
-      JOIN users u ON s.user_id = u.id
-      JOIN courses c ON s.course_id = c.id
-      JOIN departments d ON s.department_id = d.id
-      WHERE s.id = 1
-    `).get();
+      WHERE wl.parent_user_id = ?
+    `).all(req.user.id);
+
+    let activeWard = null;
+    const requestedWardId = req.query.wardId ? Number(req.query.wardId) : null;
+
+    if (requestedWardId && linkedWards.some(w => w.student_id === requestedWardId)) {
+      activeWard = linkedWards.find(w => w.student_id === requestedWardId);
+    } else if (linkedWards.length > 0) {
+      activeWard = linkedWards.find(w => w.is_primary === 1) || linkedWards[0];
+    } else {
+      // Fallback
+      activeWard = {
+        student_id: 1,
+        student_name: 'Tejassveer Singh Vasant',
+        roll_no: '071/CSE2/2023',
+        enrollment_no: '07113202723',
+        course_name: 'B.Tech CSE',
+        semester: 4,
+        section: 'CSE-2',
+        current_cgpa: 8.78
+      };
+    }
 
     // Ward attendance
     const attRec = db.prepare(`
@@ -190,10 +250,10 @@ router.get('/summary', verifyToken, (req, res) => {
         SUM(CASE WHEN ar.status = 'Absent' THEN 1 ELSE 0 END) as absent
       FROM attendance_records ar
       WHERE ar.student_id = ?
-    `).get(ward.id);
+    `).get(activeWard.student_id);
 
-    const total = attRec.total || 0;
-    const attended = (attRec.present || 0) + ((attRec.late || 0) * 0.5);
+    const total = attRec ? attRec.total : 0;
+    const attended = (attRec ? attRec.present : 0) + ((attRec ? attRec.late : 0) * 0.5);
     const attPct = total > 0 ? Number(((attended / total) * 100).toFixed(1)) : 88.0;
 
     // Ward fee payment
@@ -203,7 +263,7 @@ router.get('/summary', verifyToken, (req, res) => {
       JOIN fee_structures fs ON sfp.fee_structure_id = fs.id
       WHERE sfp.student_id = ?
       ORDER BY sfp.id DESC LIMIT 1
-    `).get(ward.id);
+    `).get(activeWard.student_id);
 
     // Latest marks
     const recentMarks = db.prepare(`
@@ -212,53 +272,38 @@ router.get('/summary', verifyToken, (req, res) => {
       JOIN subjects sub ON em.subject_id = sub.id
       WHERE em.student_id = ?
       LIMIT 4
-    `).all(ward.id);
+    `).all(activeWard.student_id);
 
     const recentNotices = db.prepare('SELECT * FROM notices WHERE target_audience IN ("All", "Parents") ORDER BY is_pinned DESC, created_at DESC LIMIT 3').all();
 
     return res.json({
       role: 'parent',
-      ward: {
-        id: ward.id,
-        name: ward.student_name,
-        roll_no: ward.roll_no,
-        enrollment_no: ward.enrollment_no,
-        course: ward.course_name,
-        semester: ward.semester,
-        section: ward.section,
-        current_cgpa: ward.current_cgpa,
-        avatar_url: ward.avatar_url
-      },
+      linked_wards: linkedWards,
+      active_ward: activeWard,
       stats: {
         live_attendance: attPct,
         is_attendance_risk: attPct < 75.0,
         total_classes: total,
         classes_attended: attended,
-        classes_absent: attRec.absent || 0,
+        classes_absent: attRec ? attRec.absent : 0,
         fee_status: feePayment ? feePayment.status : 'Paid',
         fee_due_amount: feePayment ? feePayment.amount_due : 0,
-        fee_payment_id: feePayment ? feePayment.id : null
+        fee_payment_id: feePayment ? feePayment.id : null,
+        fee_due_date: feePayment ? feePayment.due_date : null
       },
       recent_marks: recentMarks,
-      recent_notices: recentNotices,
-      mentor_contact: {
-        name: 'Ms. Basanti Pal Nandi',
-        role: 'Faculty Mentor & Assistant Professor',
-        email: 'faculty.nandi@gtbit.ac.in',
-        phone: '+91 98112 34568',
-        office: 'Room 304-A, GTBIT'
-      }
+      recent_notices: recentNotices
     });
   }
 
-  res.json({ message: 'Welcome to GTBIT ERP Portal' });
+  res.status(400).json({ error: 'Unknown role' });
 });
 
-// GET /api/dashboard/notifications - User's notifications
+// GET /api/dashboard/notifications - Notification center
 router.get('/notifications', verifyToken, (req, res) => {
   const notifications = db.prepare(`
     SELECT * FROM notifications 
-    WHERE user_id = ? 
+    WHERE user_id = ?
     ORDER BY created_at DESC 
     LIMIT 20
   `).all(req.user.id);
@@ -270,13 +315,13 @@ router.get('/notifications', verifyToken, (req, res) => {
   `).get(req.user.id).count;
 
   res.json({
-    unread_count: unreadCount,
-    notifications
+    notifications,
+    unread_count: unreadCount
   });
 });
 
-// POST /api/dashboard/notifications/mark-read
-router.post('/notifications/mark-read', verifyToken, (req, res) => {
+// PUT /api/dashboard/notifications/mark-read - Mark notifications read
+router.put('/notifications/mark-read', verifyToken, (req, res) => {
   const { id } = req.body;
   if (id) {
     db.prepare('UPDATE notifications SET is_read = 1 WHERE id = ? AND user_id = ?').run(id, req.user.id);

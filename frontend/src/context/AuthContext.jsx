@@ -1,4 +1,5 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
+import permissions from '../config/permissions.json';
 
 const AuthContext = createContext();
 
@@ -10,12 +11,21 @@ export function AuthProvider({ children }) {
   const [parentProfile, setParentProfile] = useState(null);
   const [loading, setLoading] = useState(true);
   const [theme, setTheme] = useState(localStorage.getItem('erp_theme') || 'light');
+  const hasLoggedOut = useRef(false);
 
-  // Apply theme to document element
+  // Synchronize data-theme and data-role on document element
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
     localStorage.setItem('erp_theme', theme);
   }, [theme]);
+
+  useEffect(() => {
+    if (user?.role) {
+      document.documentElement.setAttribute('data-role', user.role.toLowerCase());
+    } else {
+      document.documentElement.setAttribute('data-role', 'student');
+    }
+  }, [user?.role]);
 
   const toggleTheme = () => {
     setTheme(prev => (prev === 'light' ? 'dark' : 'light'));
@@ -25,7 +35,12 @@ export function AuthProvider({ children }) {
   useEffect(() => {
     async function loadUser() {
       if (!token) {
-        // Auto-login as default Student (Tejassveer) for immediate smooth evaluation if no token
+        // If user explicitly logged out, stay on login screen
+        if (hasLoggedOut.current) {
+          setLoading(false);
+          return;
+        }
+        // First visit with no token — auto-login for demo convenience
         await quickSwitchRole('student');
         setLoading(false);
         return;
@@ -42,8 +57,10 @@ export function AuthProvider({ children }) {
           setFacultyProfile(data.faculty);
           setParentProfile(data.parent);
         } else {
-          // Token expired, fallback to student quick switch
-          await quickSwitchRole('student');
+          // Token expired — show login screen
+          localStorage.removeItem('erp_token');
+          setToken(null);
+          setUser(null);
         }
       } catch (err) {
         console.error('Auth verification error:', err);
@@ -67,6 +84,7 @@ export function AuthProvider({ children }) {
       throw new Error(data.error || 'Login failed');
     }
 
+    hasLoggedOut.current = false;
     localStorage.setItem('erp_token', data.token);
     setToken(data.token);
     setUser(data.user);
@@ -99,6 +117,7 @@ export function AuthProvider({ children }) {
   };
 
   const logout = () => {
+    hasLoggedOut.current = true;
     localStorage.removeItem('erp_token');
     setToken(null);
     setUser(null);
@@ -106,6 +125,23 @@ export function AuthProvider({ children }) {
     setFacultyProfile(null);
     setParentProfile(null);
   };
+
+  const hasPermission = (module, action = 'read') => {
+    if (!user || !user.role) return false;
+    const roleKey = user.role.toLowerCase();
+    const roleRules = permissions[roleKey];
+    if (!roleRules) return false;
+    const actions = roleRules[module];
+    if (!actions || !Array.isArray(actions)) return false;
+    return actions.includes(action);
+  };
+
+  const roleMeta = {
+    admin: { label: 'Admin (Dean & HOD)', accent: '#4f46e5', badge: 'Dean & Administration' },
+    faculty: { label: 'Faculty Console', accent: '#0d9488', badge: 'Professor & Guide' },
+    parent: { label: 'Parent Portal', accent: '#d97706', badge: 'Guardian / Ward Monitor' },
+    student: { label: 'Student Console', accent: '#2563eb', badge: 'Undergraduate Scholar' }
+  }[user?.role?.toLowerCase() || 'student'] || { label: 'User', accent: '#4f46e5', badge: 'ERP Member' };
 
   return (
     <AuthContext.Provider value={{
@@ -119,7 +155,10 @@ export function AuthProvider({ children }) {
       toggleTheme,
       login,
       logout,
-      quickSwitchRole
+      quickSwitchRole,
+      hasPermission,
+      roleMeta,
+      permissions
     }}>
       {children}
     </AuthContext.Provider>

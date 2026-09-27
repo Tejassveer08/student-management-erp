@@ -1,12 +1,12 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const db = require('../db/database');
-const { verifyToken, requireRoles } = require('../middleware/authMiddleware');
+const { verifyToken, requirePermission, logAudit } = require('../middleware/authMiddleware');
 
 const router = express.Router();
 
 // GET /api/faculty - List all faculty members
-router.get('/', verifyToken, (req, res) => {
+router.get('/', verifyToken, requirePermission('faculty', 'read'), (req, res) => {
   const facultyList = db.prepare(`
     SELECT f.*, u.full_name, u.email, u.phone, u.avatar_url,
            d.name as department_name, d.code as department_code
@@ -19,10 +19,12 @@ router.get('/', verifyToken, (req, res) => {
   // Attach assigned subjects & workload summary
   const facultyWithSubjects = facultyList.map(fac => {
     const subjects = db.prepare(`
-      SELECT id, code, name, credits, semester, type
-      FROM subjects
-      WHERE faculty_id = ?
-    `).all(fac.id);
+      SELECT s.id, s.code, s.name, s.credits, s.semester, s.type,
+             fcm.section, fcm.semester as mapped_semester
+      FROM subjects s
+      LEFT JOIN faculty_class_map fcm ON s.id = fcm.subject_id AND fcm.faculty_id = ?
+      WHERE s.faculty_id = ? OR fcm.faculty_id = ?
+    `).all(fac.id, fac.id, fac.id);
 
     const timetableSlotsCount = db.prepare(`
       SELECT COUNT(*) as slot_count
@@ -41,7 +43,7 @@ router.get('/', verifyToken, (req, res) => {
 });
 
 // GET /api/faculty/:id - Single faculty details
-router.get('/:id', verifyToken, (req, res) => {
+router.get('/:id', verifyToken, requirePermission('faculty', 'read'), (req, res) => {
   const fac = db.prepare(`
     SELECT f.*, u.full_name, u.email, u.phone, u.avatar_url,
            d.name as department_name, d.code as department_code
@@ -55,10 +57,11 @@ router.get('/:id', verifyToken, (req, res) => {
     return res.status(404).json({ error: 'Faculty member not found' });
   }
 
-  const subjects = db.prepare(`
-    SELECT id, code, name, credits, semester, type, difficulty_index
-    FROM subjects
-    WHERE faculty_id = ?
+  const classMappings = db.prepare(`
+    SELECT fcm.*, s.name as subject_name, s.code as subject_code, s.credits
+    FROM faculty_class_map fcm
+    JOIN subjects s ON fcm.subject_id = s.id
+    WHERE fcm.faculty_id = ?
   `).all(fac.id);
 
   const timetable = db.prepare(`
@@ -79,13 +82,13 @@ router.get('/:id', verifyToken, (req, res) => {
 
   res.json({
     ...fac,
-    assigned_subjects: subjects,
+    assigned_classes: classMappings,
     timetable
   });
 });
 
 // POST /api/faculty - Add new faculty member (Admin only)
-router.post('/', verifyToken, requireRoles('admin'), (req, res) => {
+router.post('/', verifyToken, requirePermission('faculty', 'create'), (req, res) => {
   const { fullName, email, phone, employeeId, departmentId, designation, qualification, weeklyWorkloadHours, officeRoom } = req.body;
 
   if (!fullName || !email || !employeeId) {
@@ -104,30 +107,90 @@ router.post('/', verifyToken, requireRoles('admin'), (req, res) => {
       defaultPass,
       fullName,
       phone || null,
-      'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=150&auto=format&fit=crop&q=80'
+      'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80'
     );
 
-    const facultyResult = db.prepare(`
-      INSERT INTO faculty (user_id, employee_id, department_id, designation, qualification, weekly_workload_hours, office_room, status)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 'Active')
+    const facResult = db.prepare(`
+      INSERT INTO faculty (
+        user_id, employee_id, department_id, designation, qualification,
+        weekly_workload_hours, office_room, status
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'Active')
     `).run(
       userResult.lastInsertRowid,
       employeeId,
       departmentId || 1,
       designation || 'Assistant Professor',
-      qualification || 'M.Tech / Ph.D',
+      qualification || 'M.Tech, Ph.D (Pursuing)',
       weeklyWorkloadHours || 16,
-      officeRoom || 'Faculty Room'
+      officeRoom || 'Room 302'
     );
 
-    res.status(201).json({
-      message: 'Faculty registered successfully',
-      facultyId: facultyResult.lastInsertRowid
+    logAudit({
+      userId: req.user.id,
+      userRole: req.user.role,
+      userEmail: req.user.email,
+      action: 'FACULTY_ONBOARD',
+      entityType: 'faculty',
+      entityId: facResult.lastInsertRowid,
+      oldValue: null,
+      newValue: { fullName, email, employeeId, designation },
+      reason: 'New faculty member onboarding',
+      ipAddress: req.ip
     });
+
+    res.status(201).json({ message: 'Faculty registered successfully', facultyId: facResult.lastInsertRowid });
   } catch (err) {
     if (err.message.includes('UNIQUE')) {
       return res.status(400).json({ error: 'A user with this email or employee ID already exists.' });
     }
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/faculty/assign-class - Assign faculty to class & subject mapping (Admin only)
+router.post('/assign-class', verifyToken, requirePermission('faculty', 'assign_classes'), (req, res) => {
+  const { facultyId, subjectId, courseId, departmentId, semester, section } = req.body;
+
+  if (!facultyId || !subjectId || !semester || !section) {
+    return res.status(400).json({ error: 'Faculty ID, Subject ID, Semester, and Section are required.' });
+  }
+
+  try {
+    const result = db.prepare(`
+      INSERT INTO faculty_class_map (
+        faculty_id, subject_id, course_id, department_id, semester, section, academic_year
+      ) VALUES (?, ?, ?, ?, ?, ?, '2025-2026')
+      ON CONFLICT(faculty_id, subject_id, semester, section) DO NOTHING
+    `).run(
+      facultyId,
+      subjectId,
+      courseId || 1,
+      departmentId || 1,
+      semester,
+      section
+    );
+
+    // Also link subject.faculty_id if not set
+    db.prepare('UPDATE subjects SET faculty_id = ? WHERE id = ?').run(facultyId, subjectId);
+
+    logAudit({
+      userId: req.user.id,
+      userRole: req.user.role,
+      userEmail: req.user.email,
+      action: 'FACULTY_CLASS_ASSIGNMENT',
+      entityType: 'faculty_class_map',
+      entityId: result.lastInsertRowid || `${facultyId}_${subjectId}`,
+      oldValue: null,
+      newValue: { facultyId, subjectId, semester, section },
+      reason: 'Administrative faculty-to-class workload assignment',
+      ipAddress: req.ip
+    });
+
+    res.status(201).json({
+      message: 'Faculty class assignment mapped successfully.',
+      mappingId: result.lastInsertRowid
+    });
+  } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
