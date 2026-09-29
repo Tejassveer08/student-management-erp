@@ -13,26 +13,38 @@ router.get('/', verifyToken, requirePermission('settings', 'read'), (req, res) =
     ORDER BY s.category ASC, s.setting_key ASC
   `).all();
 
-  const formatted = {};
-  settings.forEach(s => {
-    let parsedVal = s.setting_value;
-    try {
-      parsedVal = JSON.parse(s.setting_value);
-    } catch (e) {
-      // string value
+  const formattedArray = settings.map(s => {
+    let dataType = 'string';
+    if (!isNaN(Number(s.setting_value)) && !isNaN(parseFloat(s.setting_value))) {
+      dataType = 'number';
+    } else {
+      try {
+        const parsed = JSON.parse(s.setting_value);
+        if (typeof parsed === 'object') dataType = 'json';
+      } catch (e) {}
     }
-    formatted[s.setting_key] = {
-      key: s.setting_key,
-      value: parsedVal,
-      rawValue: s.setting_value,
+
+    return {
+      setting_key: s.setting_key,
+      setting_value: s.setting_value,
       description: s.description,
-      category: s.category,
+      category: s.category || 'General',
+      data_type: dataType,
       updated_at: s.updated_at,
       updated_by: s.updated_by_name || 'System'
     };
   });
 
-  res.json(formatted);
+  // If query specifies format=map, return key-value map for backwards compatibility
+  if (req.query.format === 'map') {
+    const map = {};
+    formattedArray.forEach(item => {
+      map[item.setting_key] = item;
+    });
+    return res.json(map);
+  }
+
+  res.json(formattedArray);
 });
 
 // PUT /api/settings/:key - Update an institutional setting (Admin only with audit logging)
@@ -69,7 +81,7 @@ router.put('/:key', verifyToken, requirePermission('settings', 'update'), (req, 
     entityId: key,
     oldValue: existing.setting_value,
     newValue: stringVal,
-    reason: reason || 'Administrative policy update',
+    reason: reason || 'Administrative policy update via Governance Console',
     ipAddress: req.ip
   });
 
@@ -82,7 +94,7 @@ router.put('/:key', verifyToken, requirePermission('settings', 'update'), (req, 
 
 // GET /api/settings/audit-logs - View system audit logs (Admin only)
 router.get('/audit-logs', verifyToken, requirePermission('audit_logs', 'read'), (req, res) => {
-  const { limit = 50, offset = 0, action } = req.query;
+  const { limit = 100, offset = 0, action } = req.query;
 
   let query = `
     SELECT * FROM audit_logs
@@ -90,7 +102,7 @@ router.get('/audit-logs', verifyToken, requirePermission('audit_logs', 'read'), 
   `;
   const params = [];
 
-  if (action) {
+  if (action && action !== 'ALL') {
     query += ` AND action = ?`;
     params.push(action);
   }
@@ -101,14 +113,17 @@ router.get('/audit-logs', verifyToken, requirePermission('audit_logs', 'read'), 
   const logs = db.prepare(query).all(...params);
   const total = db.prepare('SELECT COUNT(*) as count FROM audit_logs').get().count;
 
-  res.json({
-    total,
-    logs: logs.map(l => ({
-      ...l,
-      old_value: l.old_value ? (() => { try { return JSON.parse(l.old_value); } catch(e) { return l.old_value; } })() : null,
-      new_value: l.new_value ? (() => { try { return JSON.parse(l.new_value); } catch(e) { return l.new_value; } })() : null
-    }))
-  });
+  const formattedLogs = logs.map(l => ({
+    ...l,
+    old_value: l.old_value ? (() => { try { return JSON.parse(l.old_value); } catch(e) { return l.old_value; } })() : null,
+    new_value: l.new_value ? (() => { try { return JSON.parse(l.new_value); } catch(e) { return l.new_value; } })() : null
+  }));
+
+  res.setHeader('X-Total-Count', total);
+  if (req.query.format === 'object') {
+    return res.json({ total, logs: formattedLogs });
+  }
+  res.json(formattedLogs);
 });
 
 module.exports = router;

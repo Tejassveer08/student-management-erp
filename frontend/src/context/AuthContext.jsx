@@ -73,15 +73,29 @@ export function AuthProvider({ children }) {
   }, [token]);
 
   const login = async (email, password) => {
-    const res = await fetch('/api/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password })
-    });
+    let res;
+    try {
+      res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password })
+      });
+    } catch (networkErr) {
+      throw new Error('Backend server is unreachable. Please ensure the backend is running on port 5000.');
+    }
 
-    const data = await res.json();
+    let data;
+    try {
+      data = await res.json();
+    } catch {
+      data = null;
+    }
+
     if (!res.ok) {
-      throw new Error(data.error || 'Login failed');
+      const errorMsg = data?.error || (res.status === 502 || res.status === 504 
+        ? 'Backend server is not running or unreachable (Port 5000).' 
+        : `Server error (${res.status})`);
+      throw new Error(errorMsg);
     }
 
     hasLoggedOut.current = false;
@@ -102,8 +116,12 @@ export function AuthProvider({ children }) {
         body: JSON.stringify({ role: roleName, email })
       });
 
-      if (!res.ok) return;
-      const data = await res.json();
+      if (!res.ok) {
+        console.error('Quick switch response error:', res.status);
+        return;
+      }
+      const data = await res.json().catch(() => null);
+      if (!data) return;
       localStorage.setItem('erp_token', data.token);
       setToken(data.token);
       setUser(data.user);

@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const fs = require('fs');
 require('dotenv').config();
 
 // Initialize DB schema
@@ -61,6 +62,18 @@ app.use('/api/placements', placementRoutes);
 app.use('/api/engagement', engagementRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/settings', settingsRoutes);
+
+// Serve frontend static build if present (for single-server production deployment)
+const frontendDist = path.resolve(__dirname, '../../frontend/dist');
+if (fs.existsSync(frontendDist)) {
+  app.use(express.static(frontendDist));
+  app.use((req, res, next) => {
+    if (req.method === 'GET' && !req.originalUrl.startsWith('/api')) {
+      return res.sendFile(path.resolve(frontendDist, 'index.html'));
+    }
+    next();
+  });
+}
 
 // Error handling fallback
 app.use((err, req, res, next) => {

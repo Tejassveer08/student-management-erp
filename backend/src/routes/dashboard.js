@@ -274,7 +274,7 @@ router.get('/summary', verifyToken, (req, res) => {
       LIMIT 4
     `).all(activeWard.student_id);
 
-    const recentNotices = db.prepare('SELECT * FROM notices WHERE target_audience IN ("All", "Parents") ORDER BY is_pinned DESC, created_at DESC LIMIT 3').all();
+    const recentNotices = db.prepare("SELECT * FROM notices WHERE target_audience IN ('All', 'Parents') ORDER BY is_pinned DESC, created_at DESC LIMIT 3").all();
 
     return res.json({
       role: 'parent',

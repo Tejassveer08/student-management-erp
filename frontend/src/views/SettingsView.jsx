@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { 
   ShieldCheck, 
+  ShieldAlert,
   Settings, 
   FileText, 
   Save, 
@@ -13,11 +14,13 @@ import {
   Clock, 
   User, 
   Activity,
-  Sliders
+  Sliders,
+  Download,
+  Database
 } from 'lucide-react';
 
 export default function SettingsView() {
-  const { token, user, hasPermission } = useAuth();
+  const { token, user, hasPermission, quickSwitchRole } = useAuth();
   const [settings, setSettings] = useState([]);
   const [auditLogs, setAuditLogs] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -28,8 +31,12 @@ export default function SettingsView() {
   const [auditFilterAction, setAuditFilterAction] = useState('ALL');
 
   useEffect(() => {
-    fetchData();
-  }, [token]);
+    if (token && user?.role === 'admin') {
+      fetchData();
+    } else {
+      setLoading(false);
+    }
+  }, [token, user?.role]);
 
   async function fetchData() {
     setLoading(true);
@@ -41,11 +48,24 @@ export default function SettingsView() {
 
       if (settRes.ok) {
         const settData = await settRes.json();
-        setSettings(settData);
+        const settArray = Array.isArray(settData)
+          ? settData
+          : Object.keys(settData).map(k => ({
+              setting_key: k,
+              setting_value: settData[k].rawValue || (typeof settData[k].value === 'object' ? JSON.stringify(settData[k].value, null, 2) : String(settData[k].value ?? '')),
+              description: settData[k].description,
+              category: settData[k].category || 'General',
+              data_type: typeof settData[k].value === 'number' ? 'number' : (typeof settData[k].value === 'object' ? 'json' : 'string'),
+              updated_at: settData[k].updated_at,
+              updated_by: settData[k].updated_by_name || 'System'
+            }));
+        setSettings(settArray);
       }
+
       if (logsRes.ok) {
         const logsData = await logsRes.json();
-        setAuditLogs(logsData);
+        const logsArray = Array.isArray(logsData) ? logsData : (logsData.logs || []);
+        setAuditLogs(logsArray);
       }
     } catch (err) {
       console.error('Failed to load settings or audit logs:', err);
@@ -69,18 +89,23 @@ export default function SettingsView() {
         },
         body: JSON.stringify({
           value: setting.setting_value,
-          description: setting.description
+          description: setting.description,
+          reason: `Admin updated ${setting.setting_key} via Governance Console`
         })
       });
 
       if (res.ok) {
-        setToastMessage(`Updated ${setting.setting_key} successfully!`);
-        setTimeout(() => setToastMessage(null), 3000);
-        // Refresh audit logs since settings update produces an audit entry
+        setToastMessage(`Policy parameter "${setting.setting_key}" updated & logged!`);
+        setTimeout(() => setToastMessage(null), 3500);
+
+        // Refresh audit logs since settings update produces a real-time audit entry
         const logsRes = await fetch('/api/settings/audit-logs', { headers: { Authorization: `Bearer ${token}` } });
-        if (logsRes.ok) setAuditLogs(await logsRes.json());
+        if (logsRes.ok) {
+          const lData = await logsRes.json();
+          setAuditLogs(Array.isArray(lData) ? lData : (lData.logs || []));
+        }
       } else {
-        const err = await res.json();
+        const err = await res.json().catch(() => ({}));
         alert(`Failed to save: ${err.error || 'Server error'}`);
       }
     } catch (err) {
@@ -89,6 +114,84 @@ export default function SettingsView() {
       setSavingKey(null);
     }
   };
+
+  // Export audit trail to CSV
+  const exportAuditCSV = () => {
+    if (!filteredAuditLogs.length) return;
+    const headers = ['ID', 'Timestamp', 'Actor Email', 'Role', 'Action', 'Entity Type', 'Entity ID', 'Prior Value', 'New Value', 'Reason', 'IP Address'];
+    const rows = filteredAuditLogs.map(l => [
+      l.id,
+      `"${new Date(l.created_at).toISOString()}"`,
+      `"${l.user_email || ''}"`,
+      `"${l.user_role || ''}"`,
+      `"${l.action || ''}"`,
+      `"${l.entity_type || ''}"`,
+      `"${l.entity_id || ''}"`,
+      `"${(typeof l.old_value === 'object' ? JSON.stringify(l.old_value) : (l.old_value || '')).replace(/"/g, '""')}"`,
+      `"${(typeof l.new_value === 'object' ? JSON.stringify(l.new_value) : (l.new_value || '')).replace(/"/g, '""')}"`,
+      `"${(l.reason || '').replace(/"/g, '""')}"`,
+      `"${l.ip_address || ''}"`
+    ]);
+    const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map(e => e.join(','))].join('\n');
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement('a');
+    link.setAttribute('href', encodedUri);
+    link.setAttribute('download', `gtbit_audit_trail_${new Date().toISOString().slice(0, 10)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  // Guard against non-admin roles
+  if (user && user.role !== 'admin') {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', alignItems: 'center', justifyContent: 'center', minHeight: '60vh' }}>
+        <div className="glass-panel" style={{
+          padding: '3rem 2.5rem',
+          maxWidth: '560px',
+          textAlign: 'center',
+          borderRadius: 'var(--radius-xl)',
+          border: '1px solid var(--border-subtle)',
+          boxShadow: 'var(--shadow-float)'
+        }}>
+          <div style={{
+            width: '64px',
+            height: '64px',
+            borderRadius: '20px',
+            background: 'rgba(239, 68, 68, 0.12)',
+            color: 'var(--danger)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            margin: '0 auto 1.5rem',
+            border: '1px solid rgba(239, 68, 68, 0.25)'
+          }}>
+            <ShieldAlert size={32} />
+          </div>
+
+          <span className="badge badge-danger" style={{ marginBottom: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+            Administrative Authority Required
+          </span>
+
+          <h2 style={{ fontSize: '1.4rem', fontWeight: 800, marginBottom: '0.75rem' }}>
+            Institutional Governance & Audit Logs
+          </h2>
+
+          <p style={{ color: 'var(--text-secondary)', fontSize: '0.88rem', lineHeight: 1.6, marginBottom: '1.75rem' }}>
+            This console governs campus-wide regulatory policies, grading scales, CGPA prediction weights, and tamper-evident audit trails. It is restricted to the <strong>Administrator / Dean</strong> role.
+          </p>
+
+          <button
+            onClick={() => quickSwitchRole('admin')}
+            className="btn btn-primary"
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', padding: '0.75rem 1.5rem', fontWeight: 700 }}
+          >
+            <ShieldCheck size={16} /> Switch to Admin Persona (Dean Academics)
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   // Filter audit logs
   const filteredAuditLogs = auditLogs.filter(log => {
@@ -106,9 +209,22 @@ export default function SettingsView() {
 
   if (loading) {
     return (
-      <div style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-muted)' }}>
-        <div style={{ fontSize: '1.5rem', marginBottom: '0.5rem' }}>⚡ Loading Governance Console...</div>
-        <div>Retrieving institutional policy configurations and audit logs...</div>
+      <div style={{ padding: '4rem 2rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+        <div style={{
+          width: '48px',
+          height: '48px',
+          border: '3px solid var(--border-subtle)',
+          borderTopColor: 'var(--role-accent)',
+          borderRadius: '50%',
+          animation: 'spin 0.8s linear infinite',
+          margin: '0 auto 1.5rem'
+        }}></div>
+        <div style={{ fontSize: '1.15rem', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '0.35rem' }}>
+          Loading Governance & Regulatory Console...
+        </div>
+        <div style={{ fontSize: '0.84rem' }}>
+          Retrieving institutional policy configurations and audit trails...
+        </div>
       </div>
     );
   }
@@ -143,12 +259,14 @@ export default function SettingsView() {
           <button 
             onClick={() => setActiveSubTab('settings')}
             className={`btn btn-sm ${activeSubTab === 'settings' ? 'btn-primary' : 'btn-secondary'}`}
+            style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}
           >
-            <Settings size={15} /> Policy Parameters
+            <Settings size={15} /> Policy Parameters ({settings.length})
           </button>
           <button 
             onClick={() => setActiveSubTab('audit_logs')}
             className={`btn btn-sm ${activeSubTab === 'audit_logs' ? 'btn-primary' : 'btn-secondary'}`}
+            style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}
           >
             <Activity size={15} /> System Audit Trail ({auditLogs.length})
           </button>
@@ -175,68 +293,98 @@ export default function SettingsView() {
       {/* Subtab 1: Institutional Settings */}
       {activeSubTab === 'settings' && (
         <div className="glass-panel" style={{ padding: '1.5rem' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '0.75rem' }}>
             <div>
               <h2 style={{ fontSize: '1.15rem', fontWeight: 700 }}>Institutional Policy Knobs</h2>
               <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
                 Configurable parameters impacting academic regulations, automated detention alerts, and fee structures.
               </p>
             </div>
-            <button onClick={fetchData} className="btn btn-secondary btn-sm">
+            <button onClick={fetchData} className="btn btn-secondary btn-sm" style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
               <RefreshCw size={14} /> Refresh
             </button>
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: '1rem' }}>
-            {settings.map(s => (
-              <div key={s.setting_key} style={{
-                padding: '1.25rem',
-                borderRadius: 'var(--radius-md)',
-                background: 'var(--bg-surface-subtle)',
-                border: '1px solid var(--border-subtle)',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '0.75rem'
-              }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ fontWeight: 700, fontSize: '0.9rem', color: 'var(--role-accent)' }}>
-                    {s.setting_key.replace(/_/g, ' ').toUpperCase()}
-                  </span>
-                  <span className="badge badge-info" style={{ fontSize: '0.65rem' }}>
-                    Type: {s.data_type || 'string'}
-                  </span>
-                </div>
+            {settings.map(s => {
+              const isJson = s.data_type === 'json' || s.setting_value?.trim().startsWith('{') || s.setting_value?.trim().startsWith('[');
+              return (
+                <div key={s.setting_key} style={{
+                  padding: '1.25rem',
+                  borderRadius: 'var(--radius-md)',
+                  background: 'var(--bg-surface-subtle)',
+                  border: '1px solid var(--border-subtle)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '0.75rem'
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontWeight: 700, fontSize: '0.9rem', color: 'var(--role-accent)' }}>
+                      {s.setting_key.replace(/_/g, ' ').toUpperCase()}
+                    </span>
+                    <span className="badge badge-info" style={{ fontSize: '0.65rem' }}>
+                      Category: {s.category || 'Academic'}
+                    </span>
+                  </div>
 
-                <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
-                  {s.description || 'Configurable institutional governance rule.'}
-                </p>
+                  <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                    {s.description || 'Configurable institutional governance rule.'}
+                  </p>
 
-                <div style={{ display: 'flex', gap: '0.5rem', marginTop: 'auto' }}>
-                  <input 
-                    type={s.data_type === 'number' ? 'number' : 'text'}
-                    value={s.setting_value}
-                    onChange={(e) => handleSettingChange(s.setting_key, e.target.value)}
-                    style={{
-                      flex: 1,
-                      padding: '0.5rem 0.75rem',
-                      borderRadius: 'var(--radius-sm)',
-                      border: '1px solid var(--border-strong)',
-                      background: 'var(--bg-surface)',
-                      color: 'var(--text-primary)',
-                      fontSize: '0.85rem'
-                    }}
-                  />
-                  <button 
-                    onClick={() => saveSetting(s)}
-                    disabled={savingKey === s.setting_key}
-                    className="btn btn-primary btn-sm"
-                  >
-                    <Save size={14} />
-                    {savingKey === s.setting_key ? 'Saving...' : 'Save'}
-                  </button>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginTop: 'auto' }}>
+                    {isJson ? (
+                      <textarea
+                        rows={4}
+                        value={s.setting_value}
+                        onChange={(e) => handleSettingChange(s.setting_key, e.target.value)}
+                        style={{
+                          width: '100%',
+                          padding: '0.5rem 0.75rem',
+                          borderRadius: 'var(--radius-sm)',
+                          border: '1px solid var(--border-strong)',
+                          background: 'var(--bg-surface)',
+                          color: 'var(--text-primary)',
+                          fontFamily: 'var(--font-mono)',
+                          fontSize: '0.78rem',
+                          resize: 'vertical'
+                        }}
+                      />
+                    ) : (
+                      <input 
+                        type={s.data_type === 'number' ? 'number' : 'text'}
+                        step="any"
+                        value={s.setting_value}
+                        onChange={(e) => handleSettingChange(s.setting_key, e.target.value)}
+                        style={{
+                          width: '100%',
+                          padding: '0.5rem 0.75rem',
+                          borderRadius: 'var(--radius-sm)',
+                          border: '1px solid var(--border-strong)',
+                          background: 'var(--bg-surface)',
+                          color: 'var(--text-primary)',
+                          fontSize: '0.85rem'
+                        }}
+                      />
+                    )}
+
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>
+                        Updated by: {s.updated_by || 'System'}
+                      </span>
+                      <button 
+                        onClick={() => saveSetting(s)}
+                        disabled={savingKey === s.setting_key}
+                        className="btn btn-primary btn-sm"
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}
+                      >
+                        <Save size={14} />
+                        {savingKey === s.setting_key ? 'Saving...' : 'Save Rule'}
+                      </button>
+                    </div>
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
@@ -252,7 +400,16 @@ export default function SettingsView() {
               </p>
             </div>
 
-            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
+              <button
+                onClick={exportAuditCSV}
+                className="btn btn-secondary btn-sm"
+                title="Download CSV for regulatory compliance & accreditation"
+                style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}
+              >
+                <Download size={14} /> Export CSV
+              </button>
+
               <div style={{ position: 'relative' }}>
                 <Search size={14} style={{ position: 'absolute', left: '0.75rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
                 <input 
