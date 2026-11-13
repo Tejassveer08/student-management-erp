@@ -2,7 +2,7 @@
 
 ### Guru Tegh Bahadur Institute of Technology (GTBIT)
 **Guru Gobind Singh Indraprastha University (GGSIPU), New Delhi**  
-*Department of Computer Science & Engineering | Academic Session 2023–2027*
+*B.Tech (CSE, IT, ECE, AI-ML, AI-DS) | Academic Session 2023–2027*
 
 ---
 
@@ -20,13 +20,13 @@
 
 ## 🌟 Executive Overview
 
-Educational institutions handle enormous volumes of academic and administrative data on a daily basis—ranging from admissions, course allocations, and daily attendance to internal evaluations, university examinations, fees collection, and placement drives. Conventional paper registers and disconnected spreadsheets suffer from high latency, data duplication, calculation discrepancies, and zero predictive visibility.
+Educational institutions handle enormous volumes of academic and administrative data on a daily basis—ranging from admissions, course allocations, and daily attendance to internal evaluations, university examinations, fees collection, societies, campus forums, and placement drives. Conventional paper registers and disconnected spreadsheets suffer from high latency, data duplication, calculation discrepancies, and zero predictive visibility.
 
-This **Full Fledged Student Management ERP System** digitizes and automates the entire academic and administrative lifecycle within a single, secure, role-governed web application.
+This **Full Fledged Student Management ERP System** digitizes and automates the entire academic and administrative lifecycle within a single, secure, role-governed web application backed by **MongoDB Atlas**.
 
-Beyond standard institutional management features, this project incorporates two distinguishing flagship innovations:
-1. **CGPA Probability Module (Core Innovation)**: A statistical prediction engine powered by a Python analytical service that estimates a student's probable semester CGPA *before* final results are declared. It models subject-wise historical difficulty indices, continuous internal assessments, and real-time attendance ratios, delivering an interactive **What-If Simulator** and early warning risk indicators.
-2. **Smart Attendance Tracker (Enhanced Module)**: Real-time attendance percentage engine supporting dynamic QR-code session generation with live expiration timers, student mobile check-in simulation, 1-tap bulk faculty marking matrices, automated **<75% detention risk warning banners**, classes-needed recovery calculations, and compliance CSV export.
+Flagship innovations include:
+1. **CGPA Probability Module (Core Innovation)**: A statistical prediction engine powered by a Python analytical service that estimates a student's probable semester CGPA *before* final results are declared. It models subject-wise historical difficulty indices, continuous internal assessments, and real-time attendance ratios, delivering an interactive **What-If Simulator** and early-warning risk indicators.
+2. **Smart Attendance Tracker (Enhanced Module)**: Real-time attendance engine supporting dynamic QR-code session generation with live expiration timers, student mobile check-in, section-wise 1-tap bulk faculty marking (`CSE-1..3`, `CSE-E1..E2`, `IT-1..3`, `ECE-1..3`, `AIML-1..2`, `AIDS-1..2`), automated **<75% detention risk alerts**, live Admin **Early-Warning Risk Cohort**, classes-needed recovery calculations, Society Duty Attendance credit, and CSV export.
 
 ---
 
@@ -35,132 +35,105 @@ Beyond standard institutional management features, this project incorporates two
 ```
    ┌─────────────────────────────────────────────────────────────┐
    │                   React 19 + Vite Frontend                  │
-   │      (Lucide Icons, Tailwind-compatible Glassmorphism,      │
-   │           Canvas-Confetti, Responsive Dashboards)           │
+   │      (Lucide Icons, Glassmorphism UI, Canvas-Confetti,      │
+   │           Role-Based Dashboards & Data Filtering)           │
    └──────────────────────────────┬──────────────────────────────┘
                                   │ JSON REST APIs (JWT Bearer)
                                   ▼
    ┌─────────────────────────────────────────────────────────────┐
    │                  Node.js / Express Backend                  │
-   │  (Role Authorization, Password Encryption, Route Handlers)   │
+   │   (RBAC Middleware, Bcrypt Auth, Mongoose ODM, Groq AI)     │
    └───────────────┬──────────────────────────────┬──────────────┘
-                   │ SQL Queries                  │ Stdin JSON Pipe
+                   │ Mongoose / TLS               │ Stdin JSON Pipe
                    ▼                              ▼
    ┌──────────────────────────────┐ ┌────────────────────────────┐
-   │     Relational Database      │ │ Python Analytics Engine    │
-   │  - SQLite (better-sqlite3)   │ │  (cgpa_engine.py:          │
-   │    Active zero-config engine │ │   Difficulty Scoring,      │
-   │  - MySQL 8.0 DDL provided    │ │   Regression, Confidence   │
-   │    (mysql_schema.sql)        │ │   Interval Estimation)     │
+   │        MongoDB Atlas         │ │ Python Analytics Engine    │
+   │  - Cluster0 Cloud Database   │ │  (cgpa_engine.py:          │
+   │  - 929 Users / 905 Students  │ │   Difficulty Scoring,      │
+   │  - 20 Faculty across 5 Depts │ │   Regression, Confidence   │
+   │  - 27k+ Attendance & Marks   │ │   Interval Estimation)     │
    └──────────────────────────────┘ └────────────────────────────┘
 ```
 
 - **Frontend**: React 19, Vite, Lucide React icons, Canvas-Confetti, Google Fonts (*Plus Jakarta Sans* and *JetBrains Mono*).
-- **Backend**: Node.js v22, Express.js, JWT (`jsonwebtoken`), Password Hashing (`bcryptjs`), SQLite (`better-sqlite3`) in WAL mode with full foreign keys.
+- **Backend**: Node.js, Express.js, JWT (`jsonwebtoken`), Password Hashing (`bcryptjs`), Mongoose ODM (`mongodb` / MongoDB Atlas), optional Groq AI integration (`GROQ_API_KEY`).
 - **Predictive Engine**: Python 3 service (`python_service/cgpa_engine.py`) using weighted composite scoring and confidence band metrics, with seamless zero-latency fallback.
-- **Enterprise Database DDL**: Comprehensive MySQL DDL script (`backend/mysql_schema.sql`) for production deployment on Render, Railway, AWS RDS, or cloud MySQL.
+
+---
+
+## 📊 Seeded Institutional Scale (MongoDB Atlas)
+
+The database (`backend/src/db/seed.js`) provisions a realistic, full-campus dataset:
+
+| Entity | Count | Details |
+| :--- | :--- | :--- |
+| **Users** | **929** | 1 Admin, 20 Faculty, 3 Parents, 905 Students (every user has individual login credentials) |
+| **Departments & Courses** | **5** | **CSE**, **IT**, **ECE**, **AI-ML**, **AI-DS** |
+| **Students** | **905** | 5 core demo students + 900 uniquely named students across 15 sections (`CSE-1..3`, `CSE-E1..E2`, `IT-1..3`, `ECE-1..3`, `AIML-1..2`, `AIDS-1..2`) and Semesters 1–6 |
+| **Faculty** | **20** | 4 faculty per department across CSE, IT, ECE, AI-ML, AI-DS with employee IDs, designations, subjects, timetables, assignments, and notes |
+| **Subjects** | **49** | Core Semester 1–6 subjects + 17 department-specific subjects |
+| **Exam Marks** | **27,150** | Individual randomized marks for all 905 students across all **6 semesters (Semesters 1–6)** |
+| **Attendance Records** | **27,150** | Randomized attendance across all 905 students and all 6 semesters (`55%`–`98%`) |
+| **Fee Structures** | **30** | Semester-wise fee structures for **Semesters 1–6** across all **5 B.Tech courses** + 905 payment records |
+| **GTBIT Societies** | **29** | Official campus technical, cultural, and entrepreneurial societies + duty attendance requests |
+| **Forum Threads & Posts** | **12 / 18** | Subject doubts, society inquiries, and general placement/exam discussions |
+| **Library Books & Issues** | **20 / 32** | Textbooks across CSE, AI-ML, Data Science, ECE, Cybersecurity + issue/overdue records |
+| **Placement Drives** | **12** | Department-targeted opportunities across CSE, IT, ECE, AI-ML, and AI-DS + 29 applications |
+| **Bulletin Notices** | **10** | Circulars across all departments (`Urgent`, `Academic`, `Placement`, `Event`) |
 
 ---
 
 ## 🚀 Key Modules & Feature Implementation Guide
 
-The project covers all modules specified in Section 2 (A through N) of the official Project Synopsis and PPT:
-
-### 1. User Authentication & Role Management (Section A)
+### 1. User Authentication & Role Management
+- **Strict Manual Sign-In**: No quick sign-in or auto-login; every user enters their identifier and password.
+- **Flexible Identifier Login**: Supports **Email** (`admin@gtbit.ac.in`), **Student Roll No** (`071/CSE2/2023`, `001/CSE-M/2025`), **Enrollment No**, or **Faculty Employee ID** (`FAC-CSE-001`, `FAC-IT-001`).
 - **Role-Based Access Control (RBAC)**: Distinct permissions and views for **Admin**, **Faculty**, **Student**, and **Parent**.
-- **Security**: JWT-based session security with bcrypt hashed passwords.
-- **Instant Persona Switcher**: Header bar allows reviewers to switch between Admin, Faculty, High-Performing Student, At-Risk Student, and Parent in one click.
 
-### 2. Student Management (Section B)
-- Complete directory with search, branch, and semester filters.
-- Personal, academic, parent, and contact records.
-- Detailed student profile modal displaying enrollment numbers, batch, CGPA, attendance %, and fee dues.
-- New Student Admission Registration form with automated ID generation.
+### 2. Student & Faculty Management
+- **Student Directory**: Search and filter all 905 students by **Semester (All Semesters / Sem 1–6)** and **Section (`CSE-1..3`, `CSE-E1..E2`, `IT-1..3`, `ECE-1..3`, `AIML-1..2`, `AIDS-1..2`)**.
+- **Faculty Directory**: 20 faculty across all 5 departments with qualifications, designations, office rooms, workload hours, and `FacultyClassMap` subject/section allocations.
 
-### 3. Faculty & Staff Management (Section C)
-- Faculty profiles with qualifications, designation, and department.
-- Weekly teaching workload hour counters and availability badges.
-- Dynamic faculty-to-subject and faculty-to-class mapping.
+### 3. Smart Attendance Tracker & Early-Warning Risk Cohort
+- **Dynamic QR Session & Mobile Check-In**: Faculty generate timed QR tokens; students check in live.
+- **Section-Wise One-Tap Roll Call**: Switch between all 15 sections (`CSE-1` through `AIDS-2`) to mark attendance.
+- **Live Early-Warning Risk Cohort**: Admin dashboard dynamically lists all students falling below the `75%` attendance threshold, sorted by lowest attendance percentage.
 
-### 4. Smart Attendance Tracker (Flagship Innovation — Section D)
-- **Real-Time Attendance Engine**: Continuous computation of total, attended, and percentage figures.
-- **75% Regulatory Threshold Monitor**: Proactive detention warnings when attendance dips below 75%.
-- **Attendance Recovery Calculator**: Informs students exactly how many consecutive lectures they must attend to regain 75% eligibility.
-- **Dynamic QR Code Session Generator**: Faculty can spin up a real-time QR code session with countdown timers.
-- **Student Mobile QR Check-In**: Students can enter the active session token to instantly check in.
-- **One-Tap Bulk Marking**: Faculty matrix to mark all students Present/Absent with one click.
-- **Compliance Export**: One-click download of attendance registers in CSV format.
+### 4. Examinations, 6-Semester Marksheets & CGPA Probability
+- **Semester 1–6 Marksheet Selector**: View individual semester marks, letter grades (`O`, `A+`, `A`, `B+`, `B`, `C`, `F`), credits, and SGPA for any student across all 6 semesters.
+- **Faculty Marks Entry**: Scoped via `FacultyClassMap` so faculty across CSE, IT, ECE, AI-ML, and AI-DS can record and moderate marks.
+- **CGPA Probability & What-If Simulator**: Projects semester SGPA/CGPA using historical difficulty, internal scores, and attendance.
 
-### 5. Academic & Course Management (Section E)
-- Course, department, and semester catalog with credit allocations.
-- Historical subject difficulty ratings.
-- Interactive weekly timetable schedule (Monday through Friday) showing lecture slots, faculty assignments, and room numbers.
+### 5. Timetable, Assignments & Study Notes
+- **Multi-Section Weekly Timetable**: Monday–Friday lecture and lab slots across all sections and department faculty.
+- **Assignments & Study Materials**: 20 assignments and 22 lecture note PDFs/PPTXs across core and department subjects.
 
-### 6. Examination & Result Management (Section F)
-- Examination scheduling (Mid-Terms, End-Terms, Practicals) with date and maximum marks.
-- Faculty Mark Entry dialog for internal assessments and end-term evaluations.
-- **Official Statement of Grades (Report Card)**: University-formatted marksheet showing subject codes, credits, marks obtained, letter grades (O, A+, A, B+, B, C, F), semester SGPA, and cumulative CGPA.
-- Print / Download PDF functionality.
+### 6. Semester-Wise Fees & Digital Receipts
+- **30 Semester-Wise Fee Structures**: Breakdown of Tuition, Lab & Development, Exam, and Library/Sports fees for Semesters 1–6 across all 5 B.Tech courses.
+- **Checkout & Receipts**: Supports Paid, Partial/Pending, and Overdue+Fine tracking with instant payment simulation and digital receipts.
 
-### 7. CGPA Probability Module (Core Innovation — Section G)
-- **Mathematical Formula**:
-  $$\text{Difficulty Index} = 1.0 - \left(0.55 \times \frac{\text{Historical Avg Marks}}{100} + 0.45 \times \frac{\text{Historical Pass Rate}}{100}\right)$$
-- Combines continuous internal assessment marks, subject difficulty weighting, and attendance multipliers.
-- Calculates projected SGPA, projected CGPA, and a visual confidence band (e.g. 9.15 ± 0.28).
-- **Interactive "What-If" Simulator**: Real-time slider allowing students to adjust hypothetical marks in difficult subjects (e.g., Theory of Computation, OS) to forecast the exact impact on their semester CGPA.
-- Early warning flags for high-risk subjects.
-
-### 8. Assignment & Academic Activities (Section H)
-- Assignment creation with deadlines, maximum marks, and course linking.
-- Student submission modal with notes and file attachment support.
-- Faculty grading interface with score entry and pedagogical feedback.
-- Centralized lecture notes and study material download repository.
-
-### 9. Fees & Financial Management (Section I)
-- Semester-wise fee breakdown (Tuition fee, Lab fees, University development fee).
-- Pending dues tracker and payment status tracking.
-- **"Redirect to Payment Page"**: Realistic payment gateway checkout modal supporting UPI (GPay/PhonePe), Credit/Debit Card, and Net Banking with instant mock processing and celebratory confetti.
-- **Official Digital Fee Receipt**: Complete downloadable receipt with Transaction ID, timestamp, GSTIN, and student details.
-
-### 10. Timetable, Notices & Campus Communication (Section J)
-- Campus circulars and urgent notices categorized by Academic, Examination, Administrative, and Placement.
-- Audience targeting (All Students, Faculty, Parents).
-- Admin broadcasting modal with priority pinning.
-
-### 11. Library & Hostel Management (Section K)
-- **Library Catalog**: Searchable inventory of academic books, authors, call numbers, availability status, and automated fine calculation for overdue items.
-- **Hostel Allocation**: Residential room occupancy tracking, hostel block assignments, and room facility status.
-
-### 12. Placement & Internship Management (Training & Placement Cell — Section L)
-- Corporate placement drives with visiting recruiters (Google, Microsoft, Zomato, Deloitte).
-- Automated CGPA and backlog eligibility screening.
-- 1-click student application process and status tracking.
-- Department placement statistics (Highest CTC: ₹44.0 LPA, Average CTC: ₹11.2 LPA).
-
-### 13. Additional Engagement Features (Section M)
-- **Gamified Merit Leaderboard**: Academic ranking showcasing student points, badges (Dean's List, 100% Attendance Club, Research Star, Coding Prodigy).
-- **Personalized Smart Study Planner**: Algorithmic study schedule generated based on identified weak subjects and low-attendance topics.
-- **AI Career Compass**: Skill and career recommendation engine mapping academic performance to industry roles (e.g., Distributed Systems Engineer, AI/ML Researcher).
-
-### 14. Role-Specific Dashboards (Section N)
-- **Admin Dashboard**: System-wide statistics (student count, faculty count, fee collection totals, low-attendance alerts, quick management links).
-- **Faculty Dashboard**: Class schedule, subjects taught, attendance pending alerts, assignment submission trackers.
-- **Student Dashboard**: Quick CGPA cards, attendance meter, timetable preview, recent grades, and circulars.
-- **Parent Dashboard**: Child's attendance overview, detention status alerts, examination performance, and pending fee status.
+### 7. GTBIT Societies, Campus Forum, Library, Placements & Notices
+- **29 GTBIT Societies**: Membership applications and **Society Duty Attendance** requests reviewed by subject faculty.
+- **Campus Doubt Forum**: Threaded discussions across Subjects, Societies, and General topics with faculty-verified answers and optional Groq AI support.
+- **Library & Hostel**: 20 engineering titles with 32 issue/return/overdue records, plus hostel block/room allocations.
+- **Department-Specific Placements**: 12 active/upcoming drives (Google, Microsoft, Zomato, Atlassian, Adobe, Razorpay, Qualcomm, Texas Instruments, NVIDIA, Databricks, Fractal Analytics, Jio Platforms AI Lab).
+- **Notices Bulletin**: 10 pinned and department-targeted campus circulars.
 
 ---
 
-## 🔑 Pre-Seeded Demo Accounts & Credentials
+## 🔑 Pre-Seeded Login Credentials
 
-You can test any role immediately using the 1-click quick-switch cards on the Login page, or login with these credentials:
+All 929 accounts can sign in using their **Email**, **Roll No / Enrollment No** (students), or **Employee ID** (faculty):
 
-| Role | Name | Email | Password | Notable Demo Scenario |
-| :--- | :--- | :--- | :--- | :--- |
-| **Admin** | System Administrator | `admin@gtbit.ac.in` | `Admin@123` | Institutional management, fee reports, system audits |
-| **Faculty** | Ms. Basanti Pal Nandi | `basanti@gtbit.ac.in` | `Faculty@123` | Dynamic QR code sessions, bulk attendance, grading |
-| **Student** | Tejassveer Singh Vasant | `tejassveer@gtbit.ac.in` | `Student@123` | High achiever (88.5% attendance, 9.15 CGPA), What-If simulator |
-| **Student (At-Risk)** | Aman Gupta | `aman@gtbit.ac.in` | `Student@123` | **65.2% Attendance — Triggers <75% detention risk warning!** |
-| **Parent** | Jaswinder Singh | `parent.tejassveer@gtbit.ac.in` | `Parent@123` | Parent monitoring view, child fee receipt and alerts |
+| Role | Name / Cohort | Login ID / Email | Password |
+| :--- | :--- | :--- | :--- |
+| **Admin** | Prof. Basanti Pal Nandi (Dean Academics) | `admin@gtbit.ac.in` | `admin123` |
+| **Faculty (CSE)** | Ms. Basanti Pal Nandi | `FAC-CSE-001` or `faculty.nandi@gtbit.ac.in` | `faculty123` |
+| **Faculty (IT / ECE / AI-ML / AI-DS)** | Department Faculty (`FAC-IT-001`..`004`, `FAC-ECE-001`..`004`, `FAC-AIML-001`..`004`, `FAC-AIDS-001`..`004`) | e.g. `FAC-IT-001` or `fac-it-001@gtbit.ac.in` | `faculty123` |
+| **Student (Core Demo)** | Tejassveer Singh Vasant | `071/CSE2/2023` or `tejassveer@gtbit.ac.in` | `student123` |
+| **Student (At-Risk Demo)** | Aman Gupta | `012/CSE2/2023` or `aman@gtbit.ac.in` | `student123` |
+| **Students (900 Branch Cohort)** | Any student across CSE, IT, ECE, AI-ML, AI-DS | Their `roll_no`, `enrollment_no`, or `@gtbit.ac.in` email | `student123` |
+| **Parent** | Mr. Kuldeep Singh Vasant | `parent.tejassveer@gmail.com` | `parent123` |
 
 ---
 
@@ -169,19 +142,28 @@ You can test any role immediately using the 1-click quick-switch cards on the Lo
 ### Prerequisites
 - Node.js v18 or higher (v22 tested)
 - Python 3.8+ (for statistical CGPA analytics engine)
-- Modern web browser (Chrome, Edge, Brave, Firefox)
+- MongoDB Atlas connection string (`MONGO_URI`)
 
-### 1. Clone & Setup Backend
+### 1. Configure Environment (`backend/.env`)
+Create or verify `backend/.env`:
+```env
+PORT=5000
+MONGO_URI=mongodb+srv://<username>:<password>@<cluster>.mongodb.net/?appName=Cluster0
+JWT_SECRET=gtbit_erp_jwt_secret_key_2026
+GROQ_API_KEY=<optional_groq_api_key>
+```
+
+### 2. Setup, Seed & Start Backend
 ```bash
 cd "Student Management ERP System/backend"
 npm install
-# To re-seed the SQLite database at any time:
-node src/db/seed.js
+# Seed MongoDB Atlas with 929 users, 905 students, 20 faculty, 27k+ marks & attendance:
+npm run seed
 # Start the backend API server (runs on port 5000):
-npm run dev
+node src/server.js
 ```
 
-### 2. Setup & Start Frontend
+### 3. Setup & Start Frontend
 ```bash
 cd "Student Management ERP System/frontend"
 npm install
@@ -189,45 +171,11 @@ npm install
 npm run dev
 ```
 
-### 3. Open the Application
+### 4. Open the Application
 Navigate in your browser to:
 ```
 http://localhost:3000
 ```
-
----
-
-## 🗄️ Relational Database Schema & MySQL Migration
-
-The backend is configured with an active SQLite database (`backend/src/db/erp_system.db`) that runs out of the box with zero external configuration.
-
-For cloud deployment using MySQL (AWS RDS, Render MySQL, Clever Cloud, etc.):
-1. Import `backend/mysql_schema.sql` into your MySQL instance:
-   ```bash
-   mysql -u <username> -p <database_name> < backend/mysql_schema.sql
-   ```
-2. Configure `.env` in `backend/`:
-   ```env
-   PORT=5000
-   DB_TYPE=mysql
-   DB_HOST=localhost
-   DB_USER=root
-   DB_PASSWORD=your_password
-   DB_NAME=gtbit_erp
-   JWT_SECRET=gtbit_erp_jwt_secret_key_2026
-   ```
-
----
-
-## 📸 Verification & Screenshots
-
-All core modules have been validated end-to-end via automated browser subagents and manual QA. Browser video recordings and visual artifacts are archived in the IDE brain directory:
-- **Demo Video Recording**: `gtbit_erp_demo_1790510421407.webp`
-- **CGPA Probability What-If Engine**: `cgpa_probability_module_1790510589219.png`
-- **Dynamic QR Code Attendance**: `qr_checkin_success_1790510824794.png`
-- **Detention Risk Alert (<75% Threshold)**: `smart_attendance_tracker_risk_1790510966307.png`
-- **Fees Payment & Digital Receipt**: `digital_fee_receipt_1790511075837.png`
-- **Official Statement of Grades Report Card**: `examinations_report_card_1790511226524.png`
 
 ---
 
@@ -236,5 +184,5 @@ All core modules have been validated end-to-end via automated browser subagents 
 2. Elmasri, R., & Navathe, S. B. *Fundamentals of Database Systems*. Pearson.
 3. Silberschatz, A., Korth, H. F., & Sudarshan, S. *Database System Concepts*. McGraw-Hill.
 4. MDN Web Docs, *Web Development Documentation*. https://developer.mozilla.org/en-US/
-5. W3Schools, *Web Development Tutorials and References*. https://www.w3schools.com/
+5. MongoDB & Mongoose ODM Documentation. https://mongoosejs.com/
 6. Guru Tegh Bahadur Institute of Technology (GTBIT) / GGSIP University, New Delhi.
