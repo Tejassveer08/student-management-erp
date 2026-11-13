@@ -232,9 +232,11 @@ export default function AttendanceView() {
   const handleExportCSV = () => {
     if (!summary?.subjects) return;
     let csvContent = 'data:text/csv;charset=utf-8,';
-    csvContent += 'Subject Code,Subject Name,Faculty,Total Classes,Attended,Late,Absent,Attendance %\n';
+    csvContent += 'Subject Code,Subject Name,Faculty,Total Classes,Regular Present,Society Duty Present,Total Present,Late,Absent,Attendance %\n';
     summary.subjects.forEach(s => {
-      csvContent += `"${s.subject_code}","${s.subject_name}","${s.faculty_name || 'N/A'}",${s.total_classes},${s.present_count},${s.late_count},${s.absent_count},${s.attendance_percentage}%\n`;
+      const reg = s.regular_present_count ?? s.present_count;
+      const soc = s.society_present_count ?? 0;
+      csvContent += `"${s.subject_code}","${s.subject_name}","${s.faculty_name || 'N/A'}",${s.total_classes},${reg},${soc},${s.present_count},${s.late_count},${s.absent_count},${s.attendance_percentage}%\n`;
     });
 
     const encodedUri = encodeURI(csvContent);
@@ -429,7 +431,9 @@ export default function AttendanceView() {
           <div className="stat-card info">
             <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)' }}>CLASSES ATTENDED</span>
             <div style={{ fontSize: '2rem', fontWeight: 800 }}>{summary.total_attended}</div>
-            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Present + 0.5x Late sessions</div>
+            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+              Includes {summary.total_society_credited || 0} society-duty credit(s)
+            </div>
           </div>
 
           <div className="stat-card purple">
@@ -492,6 +496,7 @@ export default function AttendanceView() {
                 <th>Faculty</th>
                 <th>Conducted</th>
                 <th>Present</th>
+                <th>Society Duty</th>
                 <th>Late</th>
                 <th>Absent</th>
                 <th>Percentage</th>
@@ -508,7 +513,16 @@ export default function AttendanceView() {
                   </td>
                   <td>{sub.faculty_name || 'CSE Faculty'}</td>
                   <td style={{ fontWeight: 600 }}>{sub.total_classes}</td>
-                  <td style={{ color: 'var(--success)', fontWeight: 600 }}>{sub.present_count}</td>
+                  <td style={{ color: 'var(--success)', fontWeight: 600 }}>{sub.regular_present_count ?? sub.present_count}</td>
+                  <td>
+                    {(sub.society_present_count || 0) > 0 ? (
+                      <span className="badge badge-info" title="Approved Society Duty Present (counts toward 75%)">
+                        +{sub.society_present_count}
+                      </span>
+                    ) : (
+                      <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>0</span>
+                    )}
+                  </td>
                   <td style={{ color: 'var(--warning)', fontWeight: 600 }}>{sub.late_count}</td>
                   <td style={{ color: 'var(--danger)', fontWeight: 600 }}>{sub.absent_count}</td>
                   <td>

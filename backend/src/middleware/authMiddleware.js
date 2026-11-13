@@ -1,13 +1,10 @@
 const jwt = require('jsonwebtoken');
-const db = require('../db/database');
+const { User, Faculty, FacultyClassMap, Subject, Student, WardLink, AuditLog, getNextId } = require('../db/database');
 const permissions = require('../config/permissions.json');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'erp_gtbit_jwt_secret_super_secure_key_2026';
 
-/**
- * Verify JWT token from Authorization header and attach user context to req.user
- */
-function verifyToken(req, res, next) {
+async function verifyToken(req, res, next) {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'Authorization token required' });
@@ -16,41 +13,54 @@ function verifyToken(req, res, next) {
   const token = authHeader.split(' ')[1];
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
-    const user = db.prepare('SELECT id, email, role, full_name, phone, avatar_url FROM users WHERE id = ?').get(decoded.id);
+    const user = await User.findOne({ id: decoded.id }, 'id email role full_name phone avatar_url').lean();
     if (!user) {
       return res.status(401).json({ error: 'User not found or account deactivated' });
     }
     req.user = user;
 
-    // Attach role-specific scoping context
     if (user.role === 'faculty') {
-      const fac = db.prepare('SELECT id, employee_id, department_id FROM faculty WHERE user_id = ?').get(user.id);
+      const fac = await Faculty.findOne({ user_id: user.id }, 'id employee_id department_id').lean();
       if (fac) {
         req.faculty = fac;
-        // Fetch all assigned class & subject mappings
-        req.facultyClassMap = db.prepare(`
-          SELECT fcm.*, s.name as subject_name, s.code as subject_code
-          FROM faculty_class_map fcm
-          JOIN subjects s ON fcm.subject_id = s.id
-          WHERE fcm.faculty_id = ?
-        `).all(fac.id);
+        const maps = await FacultyClassMap.find({ faculty_id: fac.id }).lean();
+        const subIds = maps.map(m => m.subject_id);
+        const subs = await Subject.find({ id: { $in: subIds } }, 'id name code').lean();
+        const subMap = Object.fromEntries(subs.map(s => [s.id, s]));
+        req.facultyClassMap = maps.map(m => ({
+          ...m,
+          subject_name: subMap[m.subject_id]?.name,
+          subject_code: subMap[m.subject_id]?.code
+        }));
       }
     } else if (user.role === 'student') {
-      const st = db.prepare('SELECT id, roll_no, enrollment_no, semester, section, department_id, course_id FROM students WHERE user_id = ?').get(user.id);
+      const st = await Student.findOne({ user_id: user.id }, 'id roll_no enrollment_no semester section department_id course_id').lean();
       if (st) {
         req.student = st;
       }
     } else if (user.role === 'parent') {
-      const wards = db.prepare(`
-        SELECT wl.student_id, wl.relationship, wl.is_primary,
-               s.roll_no, s.enrollment_no, s.semester, s.section,
-               u.full_name as student_name, u.email as student_email
-        FROM ward_links wl
-        JOIN students s ON wl.student_id = s.id
-        JOIN users u ON s.user_id = u.id
-        WHERE wl.parent_user_id = ?
-      `).all(user.id);
-      req.parentWards = wards;
+      const links = await WardLink.find({ parent_user_id: user.id }).lean();
+      const sIds = links.map(l => l.student_id);
+      const students = await Student.find({ id: { $in: sIds } }).lean();
+      const uIds = students.map(s => s.user_id);
+      const users = await User.find({ id: { $in: uIds } }, 'id full_name email').lean();
+      const stMap = Object.fromEntries(students.map(s => [s.id, s]));
+      const uMap = Object.fromEntries(users.map(u => [u.id, u]));
+      req.parentWards = links.map(wl => {
+        const s = stMap[wl.student_id] || {};
+        const u = uMap[s.user_id] || {};
+        return {
+          student_id: wl.student_id,
+          relationship: wl.relationship,
+          is_primary: wl.is_primary,
+          roll_no: s.roll_no,
+          enrollment_no: s.enrollment_no,
+          semester: s.semester,
+          section: s.section,
+          student_name: u.full_name,
+          student_email: u.email
+        };
+      });
     }
 
     next();
@@ -59,9 +69,6 @@ function verifyToken(req, res, next) {
   }
 }
 
-/**
- * RBAC Role Guard - checks if req.user has one of the allowed roles
- */
 function requireRoles(...allowedRoles) {
   return (req, res, next) => {
     if (!req.user || !allowedRoles.includes(req.user.role)) {
@@ -74,57 +81,41 @@ function requireRoles(...allowedRoles) {
   };
 }
 
-/**
- * RBAC Permission Guard - checks if user role has [action] permission for [module]
- * based on single source of truth permissions.json
- */
 function requirePermission(moduleName, action) {
   return (req, res, next) => {
     if (!req.user) {
       return res.status(401).json({ error: 'Authentication required' });
     }
-
     const role = req.user.role;
     const modulePerms = permissions[role]?.[moduleName] || [];
-
     if (!modulePerms.includes(action)) {
       return res.status(403).json({
         error: `Permission denied: Role "${role}" does not have "${action}" permission on module "${moduleName}".`,
         module: moduleName,
         requiredAction: action,
-        role: role
+        role
       });
     }
-
     next();
   };
 }
 
-/**
- * Helper to record audit log entry for Admin overrides or destructive actions
- */
-function logAudit({ userId, userRole, userEmail, action, entityType, entityId, oldValue, newValue, reason, ipAddress }) {
+async function logAudit({ userId, userRole, userEmail, action, entityType, entityId, oldValue, newValue, reason, ipAddress }) {
   try {
-    const stmt = db.prepare(`
-      INSERT INTO audit_logs (
-        user_id, user_role, user_email, action,
-        entity_type, entity_id, old_value, new_value,
-        reason, ip_address
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-
-    stmt.run(
-      userId,
-      userRole,
-      userEmail,
+    const id = await getNextId('audit_logs');
+    await AuditLog.create({
+      id,
+      user_id: userId,
+      user_role: userRole,
+      user_email: userEmail,
       action,
-      entityType,
-      String(entityId),
-      oldValue ? (typeof oldValue === 'string' ? oldValue : JSON.stringify(oldValue)) : null,
-      newValue ? (typeof newValue === 'string' ? newValue : JSON.stringify(newValue)) : null,
-      reason || 'Administrative action',
-      ipAddress || '127.0.0.1'
-    );
+      entity_type: entityType,
+      entity_id: String(entityId),
+      old_value: oldValue ? (typeof oldValue === 'string' ? oldValue : JSON.stringify(oldValue)) : null,
+      new_value: newValue ? (typeof newValue === 'string' ? newValue : JSON.stringify(newValue)) : null,
+      reason: reason || 'Administrative action',
+      ip_address: ipAddress || '127.0.0.1'
+    });
   } catch (err) {
     console.error('Failed to write audit log:', err.message);
   }

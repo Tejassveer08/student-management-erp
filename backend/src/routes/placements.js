@@ -1,84 +1,66 @@
 const express = require('express');
-const db = require('../db/database');
+const { PlacementDrive, PlacementApplication, Student, getNextId } = require('../db/database');
 const { verifyToken, requireRoles } = require('../middleware/authMiddleware');
 
 const router = express.Router();
 
-// GET /api/placements/drives - List drives with student eligibility flag
-router.get('/drives', verifyToken, (req, res) => {
+// GET /api/placements/drives
+router.get('/drives', verifyToken, async (req, res) => {
   let studentCgpa = null;
   let studentId = null;
 
   if (req.user.role === 'student') {
-    const student = db.prepare('SELECT id, current_cgpa FROM students WHERE user_id = ?').get(req.user.id);
+    const student = await Student.findOne({ user_id: req.user.id }, 'id current_cgpa').lean();
     if (student) {
       studentCgpa = student.current_cgpa;
       studentId = student.id;
     }
   }
 
-  const drives = db.prepare('SELECT * FROM placement_drives ORDER BY drive_date ASC').all();
+  const drives = await PlacementDrive.find().sort({ drive_date: 1 }).lean();
+  const apps = studentId ? await PlacementApplication.find({ student_id: studentId }).lean() : [];
+  const appMap = Object.fromEntries(apps.map(a => [a.drive_id, a.status]));
 
-  const formatted = drives.map(d => {
-    let hasApplied = false;
-    let applicationStatus = null;
-
-    if (studentId) {
-      const app = db.prepare('SELECT status FROM placement_applications WHERE drive_id = ? AND student_id = ?').get(d.id, studentId);
-      if (app) {
-        hasApplied = true;
-        applicationStatus = app.status;
-      }
-    }
-
-    const isEligible = studentCgpa !== null ? studentCgpa >= d.eligibility_min_cgpa : true;
-
-    return {
-      ...d,
-      is_eligible: isEligible,
-      has_applied: hasApplied,
-      application_status: applicationStatus
-    };
-  });
-
-  res.json(formatted);
+  res.json(drives.map(d => ({
+    ...d,
+    is_eligible: studentCgpa !== null ? studentCgpa >= d.eligibility_min_cgpa : true,
+    has_applied: !!appMap[d.id],
+    application_status: appMap[d.id] || null
+  })));
 });
 
-// POST /api/placements/drives - Create placement drive (Admin/TnP)
-router.post('/drives', verifyToken, requireRoles('admin'), (req, res) => {
+// POST /api/placements/drives
+router.post('/drives', verifyToken, requireRoles('admin'), async (req, res) => {
   const { companyName, companyLogo, roleTitle, jobLocation, ctcLpa, eligibilityMinCgpa, driveDate, deadline, description } = req.body;
-
   if (!companyName || !roleTitle || !ctcLpa || !driveDate || !deadline) {
     return res.status(400).json({ error: 'Company name, role, CTC, drive date, and deadline are required' });
   }
 
-  const result = db.prepare(`
-    INSERT INTO placement_drives (
-      company_name, company_logo, role_title, job_location, ctc_lpa, eligibility_min_cgpa, drive_date, deadline, description, status
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Active')
-  `).run(
-    companyName,
-    companyLogo || 'https://images.unsplash.com/photo-1549923746-c502d488b3ea?w=150&auto=format&fit=crop&q=80',
-    roleTitle,
-    jobLocation || 'Pan-India',
-    ctcLpa,
-    eligibilityMinCgpa || 7.0,
-    driveDate,
+  const id = await getNextId('placement_drives');
+  await PlacementDrive.create({
+    id,
+    company_name: companyName,
+    company_logo: companyLogo || 'https://images.unsplash.com/photo-1549923746-c502d488b3ea?w=150&auto=format&fit=crop&q=80',
+    role_title: roleTitle,
+    job_location: jobLocation || 'Pan-India',
+    ctc_lpa: ctcLpa,
+    eligibility_min_cgpa: eligibilityMinCgpa || 7.0,
+    drive_date: driveDate,
     deadline,
-    description || ''
-  );
+    description: description || '',
+    status: 'Active'
+  });
 
-  res.status(201).json({ message: 'Drive created successfully', driveId: result.lastInsertRowid });
+  res.status(201).json({ message: 'Drive created successfully', driveId: id });
 });
 
-// POST /api/placements/apply - Student applies for a placement drive
-router.post('/apply', verifyToken, requireRoles('student'), (req, res) => {
+// POST /api/placements/apply
+router.post('/apply', verifyToken, requireRoles('student'), async (req, res) => {
   const { driveId, resumeLink } = req.body;
-
-  const student = db.prepare('SELECT id, current_cgpa FROM students WHERE user_id = ?').get(req.user.id);
+  const student = await Student.findOne({ user_id: req.user.id }, 'id current_cgpa').lean();
   if (!student) return res.status(404).json({ error: 'Student record not found' });
 
-  const drive = db.prepare('SELECT * FROM placement_drives WHERE id = ?').get(driveId);
+  const drive = await PlacementDrive.findOne({ id: Number(driveId) }).lean();
   if (!drive) return res.status(404).json({ error: 'Drive not found' });
 
   if (student.current_cgpa < drive.eligibility_min_cgpa) {
@@ -88,41 +70,31 @@ router.post('/apply', verifyToken, requireRoles('student'), (req, res) => {
   }
 
   try {
-    db.prepare(`
-      INSERT INTO placement_applications (drive_id, student_id, resume_link, status)
-      VALUES (?, ?, ?, 'Applied')
-    `).run(driveId, student.id, resumeLink || 'https://gtbit.ac.in/resumes/default_student.pdf');
-
+    const id = await getNextId('placement_applications');
+    await PlacementApplication.create({
+      id,
+      drive_id: Number(driveId),
+      student_id: student.id,
+      resume_link: resumeLink || 'https://gtbit.ac.in/resumes/default_student.pdf',
+      status: 'Applied'
+    });
     res.json({ message: 'Application submitted successfully to TnP Cell' });
   } catch (err) {
-    if (err.message.includes('UNIQUE')) {
+    if (err.code === 11000) {
       return res.status(400).json({ error: 'You have already applied for this placement drive' });
     }
     res.status(500).json({ error: err.message });
   }
 });
 
-// GET /api/placements/stats - Placement & recruitment analytics
-router.get('/stats', verifyToken, (req, res) => {
-  const stats = db.prepare(`
-    SELECT 
-      COUNT(DISTINCT drive_id) as total_drives,
-      MAX(ctc_lpa) as highest_ctc,
-      AVG(ctc_lpa) as average_ctc,
-      COUNT(DISTINCT student_id) as total_applicants
-    FROM placement_applications pa
-    JOIN placement_drives pd ON pa.drive_id = pd.id
-  `).get();
-
-  const selectedCount = db.prepare(`
-    SELECT COUNT(*) as count FROM placement_applications WHERE status = 'Selected'
-  `).get();
-
+// GET /api/placements/stats
+router.get('/stats', verifyToken, async (req, res) => {
+  const selectedCount = await PlacementApplication.countDocuments({ status: 'Selected' });
   res.json({
     total_drives: 12,
     highest_package_lpa: 28.0,
     average_package_lpa: 14.8,
-    total_offers: selectedCount.count || 8,
+    total_offers: selectedCount || 8,
     top_recruiters: [
       { name: 'Google India', hires: 3, ctc: '28.0 LPA' },
       { name: 'Microsoft IDC', hires: 4, ctc: '24.5 LPA' },

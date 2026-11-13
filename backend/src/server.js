@@ -4,8 +4,8 @@ const path = require('path');
 const fs = require('fs');
 require('dotenv').config();
 
-// Initialize DB schema
-require('./db/database');
+// Connect to MongoDB
+const { connectDB } = require('./db/database');
 
 const authRoutes = require('./routes/auth');
 const studentRoutes = require('./routes/students');
@@ -22,6 +22,8 @@ const placementRoutes = require('./routes/placements');
 const engagementRoutes = require('./routes/engagement');
 const dashboardRoutes = require('./routes/dashboard');
 const settingsRoutes = require('./routes/settings');
+const societiesRoutes = require('./routes/societies');
+const forumRoutes = require('./routes/forum');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -62,6 +64,8 @@ app.use('/api/placements', placementRoutes);
 app.use('/api/engagement', engagementRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/settings', settingsRoutes);
+app.use('/api/societies', societiesRoutes);
+app.use('/api/forum', forumRoutes);
 
 // Serve frontend static build if present (for single-server production deployment)
 const frontendDist = path.resolve(__dirname, '../../frontend/dist');
@@ -81,11 +85,18 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: err.message || 'Internal Server Error' });
 });
 
-app.listen(PORT, () => {
-  console.log(`================================================================`);
-  console.log(`🎓 Student Management ERP Backend Server running on port ${PORT}`);
-  console.log(`📡 Health Check: http://localhost:${PORT}/api/health`);
-  console.log(`================================================================`);
-});
+connectDB()
+  .then(() => {
+    app.listen(PORT, () => {
+      console.log(`================================================================`);
+      console.log(`🎓 Student Management ERP Backend Server running on port ${PORT}`);
+      console.log(`📡 Health Check: http://localhost:${PORT}/api/health`);
+      console.log(`================================================================`);
+    });
+  })
+  .catch((err) => {
+    console.error('Failed to connect to MongoDB:', err.message);
+    process.exit(1);
+  });
 
 module.exports = app;

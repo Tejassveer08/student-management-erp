@@ -458,6 +458,9 @@ export default function DashboardView({ onNavigate }) {
             <button onClick={() => onNavigate('assignments')} className="btn btn-secondary btn-sm" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
               <FileCheck size={16} /> Grade Submissions ({stats.pending_grading || 0})
             </button>
+            <button onClick={() => onNavigate('societies')} className="btn btn-secondary btn-sm" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+              <CheckCircle2 size={16} /> Society Duty Queue ({stats.pending_society_attendance || 0})
+            </button>
           </div>
         </div>
 
@@ -850,6 +853,52 @@ export default function DashboardView({ onNavigate }) {
               </tbody>
             </table>
           </div>
+        </div>
+
+        {/* Ward's Society Duty Attendance (Read-Only) */}
+        <div className="glass-panel" style={{ padding: '1.5rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+            <div>
+              <h3 style={{ fontSize: '1.05rem', fontWeight: 700 }}>Ward’s Society Duty Attendance</h3>
+              <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                Read-only log of society-credited classes ({stats.society_credited_classes || 0} session(s) credited as Present).
+              </p>
+            </div>
+            <button onClick={() => onNavigate('societies')} className="btn btn-secondary btn-sm">
+              View All
+            </button>
+          </div>
+
+          {(data?.ward_society_attendance || []).length === 0 ? (
+            <div style={{ fontSize: '0.84rem', color: 'var(--text-muted)', padding: '0.75rem 0' }}>
+              No society duty attendance requests recorded for this ward.
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.55rem' }}>
+              {(data?.ward_society_attendance || []).map(item => (
+                <div key={item.id} style={{
+                  padding: '0.75rem 1rem',
+                  borderRadius: 'var(--radius-md)',
+                  background: 'var(--bg-surface-subtle)',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  flexWrap: 'wrap',
+                  gap: '0.5rem'
+                }}>
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: '0.88rem' }}>{item.activity_title}</div>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                      {item.society_name} • {item.subject_code} ({item.subject_name}) • {item.date}
+                    </div>
+                  </div>
+                  <span className={`badge badge-${item.status === 'approved' ? 'success' : item.status === 'rejected' ? 'danger' : 'warning'}`}>
+                    {item.status.toUpperCase()}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Parent Fee Payment Modal */}

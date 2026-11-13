@@ -1,183 +1,255 @@
 const express = require('express');
-const db = require('../db/database');
+const {
+  Examination,
+  ExamMark,
+  Subject,
+  Student,
+  User,
+  Course,
+  Department,
+  WardLink,
+  FacultyClassMap,
+  getNextId
+} = require('../db/database');
 const { verifyToken, requirePermission, logAudit } = require('../middleware/authMiddleware');
 const { marksToGradePoint } = require('../services/cgpaCalculator');
 
 const router = express.Router();
 
 // GET /api/exams - List all examinations
-router.get('/', verifyToken, requirePermission('exams', 'read'), (req, res) => {
-  const exams = db.prepare('SELECT * FROM examinations ORDER BY start_date DESC').all();
-  res.json(exams);
+router.get('/', verifyToken, requirePermission('exams', 'read'), async (req, res) => {
+  try {
+    const exams = await Examination.find({}).sort({ start_date: -1 }).lean();
+    res.json(exams);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // POST /api/exams - Schedule new exam (Admin only)
-router.post('/', verifyToken, requirePermission('exams', 'create'), (req, res) => {
-  const { name, semester, academicYear, examType, startDate, endDate } = req.body;
-  if (!name || !semester || !examType || !startDate || !endDate) {
-    return res.status(400).json({ error: 'All exam fields are required' });
+router.post('/', verifyToken, requirePermission('exams', 'create'), async (req, res) => {
+  try {
+    const { name, semester, academicYear, examType, startDate, endDate } = req.body;
+    if (!name || !semester || !examType || !startDate || !endDate) {
+      return res.status(400).json({ error: 'All exam fields are required' });
+    }
+
+    const id = await getNextId('examinations');
+    await Examination.create({
+      id,
+      name,
+      semester: Number(semester),
+      academic_year: academicYear || '2025-2026',
+      exam_type: examType,
+      start_date: startDate,
+      end_date: endDate,
+      status: 'Scheduled'
+    });
+
+    await logAudit({
+      userId: req.user.id,
+      userRole: req.user.role,
+      userEmail: req.user.email,
+      action: 'EXAM_SCHEDULE_CREATE',
+      entityType: 'examinations',
+      entityId: id,
+      oldValue: null,
+      newValue: { name, semester, examType, startDate, endDate },
+      reason: 'New examination schedule creation',
+      ipAddress: req.ip
+    });
+
+    res.status(201).json({ message: 'Exam scheduled successfully', examId: id });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
-
-  const result = db.prepare(`
-    INSERT INTO examinations (name, semester, academic_year, exam_type, start_date, end_date, status)
-    VALUES (?, ?, ?, ?, ?, ?, 'Scheduled')
-  `).run(name, semester, academicYear || '2025-2026', examType, startDate, endDate);
-
-  logAudit({
-    userId: req.user.id,
-    userRole: req.user.role,
-    userEmail: req.user.email,
-    action: 'EXAM_SCHEDULE_CREATE',
-    entityType: 'examinations',
-    entityId: result.lastInsertRowid,
-    oldValue: null,
-    newValue: { name, semester, examType, startDate, endDate },
-    reason: 'New examination schedule creation',
-    ipAddress: req.ip
-  });
-
-  res.status(201).json({ message: 'Exam scheduled successfully', examId: result.lastInsertRowid });
 });
 
 // POST /api/exams/:id/publish - Publish final examination results (Admin only)
-router.post('/:id/publish', verifyToken, requirePermission('exams', 'publish_results'), (req, res) => {
-  const exam = db.prepare('SELECT * FROM examinations WHERE id = ?').get(req.params.id);
-  if (!exam) {
-    return res.status(404).json({ error: 'Examination not found' });
+router.post('/:id/publish', verifyToken, requirePermission('exams', 'publish_results'), async (req, res) => {
+  try {
+    const examId = Number(req.params.id);
+    const exam = await Examination.findOne({ id: examId }).lean();
+    if (!exam) {
+      return res.status(404).json({ error: 'Examination not found' });
+    }
+
+    await Examination.updateOne({ id: examId }, { $set: { status: 'Results_Declared' } });
+
+    await logAudit({
+      userId: req.user.id,
+      userRole: req.user.role,
+      userEmail: req.user.email,
+      action: 'EXAM_RESULTS_PUBLISH',
+      entityType: 'examinations',
+      entityId: examId,
+      oldValue: { status: exam.status },
+      newValue: { status: 'Results_Declared' },
+      reason: 'Official release of semester examination results',
+      ipAddress: req.ip
+    });
+
+    res.json({
+      message: `Examination "${exam.name}" results officially declared and published!`,
+      examId: exam.id,
+      status: 'Results_Declared'
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
-
-  db.prepare(`
-    UPDATE examinations
-    SET status = 'Results_Declared'
-    WHERE id = ?
-  `).run(req.params.id);
-
-  logAudit({
-    userId: req.user.id,
-    userRole: req.user.role,
-    userEmail: req.user.email,
-    action: 'EXAM_RESULTS_PUBLISH',
-    entityType: 'examinations',
-    entityId: req.params.id,
-    oldValue: { status: exam.status },
-    newValue: { status: 'Results_Declared' },
-    reason: 'Official release of semester examination results',
-    ipAddress: req.ip
-  });
-
-  res.json({
-    message: `Examination "${exam.name}" results officially declared and published!`,
-    examId: exam.id,
-    status: 'Results_Declared'
-  });
 });
 
 // GET /api/exams/marks - Fetch marks with DB scoping
-router.get('/marks', verifyToken, requirePermission('exams', 'read'), (req, res) => {
-  const { examId, subjectId } = req.query;
-  let studentId = req.query.studentId;
+router.get('/marks', verifyToken, requirePermission('exams', 'read'), async (req, res) => {
+  try {
+    const { examId, subjectId } = req.query;
+    let studentId = req.query.studentId;
 
-  // DB scoping
-  if (req.user.role === 'student') {
-    studentId = req.student ? req.student.id : 0;
-  } else if (req.user.role === 'parent') {
-    if (studentId) {
-      const isWard = db.prepare('SELECT 1 FROM ward_links WHERE parent_user_id = ? AND student_id = ?').get(req.user.id, studentId);
-      if (!isWard) return res.status(403).json({ error: 'Access denied: Not your linked ward.' });
-    } else {
-      const firstWard = db.prepare('SELECT student_id FROM ward_links WHERE parent_user_id = ? ORDER BY is_primary DESC LIMIT 1').get(req.user.id);
-      studentId = firstWard ? firstWard.student_id : 0;
+    if (req.user.role === 'student') {
+      studentId = req.student ? req.student.id : 0;
+    } else if (req.user.role === 'parent') {
+      if (studentId) {
+        const isWard = await WardLink.findOne({ parent_user_id: req.user.id, student_id: Number(studentId) }).lean();
+        if (!isWard) return res.status(403).json({ error: 'Access denied: Not your linked ward.' });
+      } else {
+        const firstWard = await WardLink.findOne({ parent_user_id: req.user.id }).sort({ is_primary: -1 }).lean();
+        studentId = firstWard ? firstWard.student_id : 0;
+      }
     }
-  }
 
-  let query = `
-    SELECT em.*, sub.code as subject_code, sub.name as subject_name, sub.credits,
-           ex.name as exam_name, ex.exam_type, ex.status as exam_status,
-           s.roll_no, s.enrollment_no, u.full_name as student_name
-    FROM exam_marks em
-    JOIN subjects sub ON em.subject_id = sub.id
-    JOIN examinations ex ON em.exam_id = ex.id
-    JOIN students s ON em.student_id = s.id
-    JOIN users u ON s.user_id = u.id
-    WHERE 1=1
-  `;
-  const params = [];
+    const filter = {};
+    if (examId) filter.exam_id = Number(examId);
+    if (subjectId) filter.subject_id = Number(subjectId);
+    if (studentId !== undefined && studentId !== '') filter.student_id = Number(studentId);
 
-  if (examId) {
-    query += ' AND em.exam_id = ?';
-    params.push(Number(examId));
-  }
-  if (subjectId) {
-    query += ' AND em.subject_id = ?';
-    params.push(Number(subjectId));
-  }
-  if (studentId) {
-    query += ' AND em.student_id = ?';
-    params.push(Number(studentId));
-  }
+    if (req.user.role === 'faculty') {
+      const maps = await FacultyClassMap.find({ faculty_id: req.faculty?.id || 0 }).lean();
+      const allowedSubjectIds = maps.map(m => m.subject_id);
+      if (filter.subject_id !== undefined) {
+        if (!allowedSubjectIds.includes(filter.subject_id)) return res.json([]);
+      } else {
+        filter.subject_id = { $in: allowedSubjectIds };
+      }
+    }
 
-  // If faculty, scope to their assigned classes/subjects
-  if (req.user.role === 'faculty') {
-    query += ` AND em.subject_id IN (SELECT subject_id FROM faculty_class_map WHERE faculty_id = ?)`;
-    params.push(req.faculty?.id || 0);
+    const marksDocs = await ExamMark.find(filter).lean();
+    if (marksDocs.length === 0) return res.json([]);
+
+    const subjectIds = [...new Set(marksDocs.map(m => m.subject_id))];
+    const examIds = [...new Set(marksDocs.map(m => m.exam_id))];
+    const studentIds = [...new Set(marksDocs.map(m => m.student_id))];
+
+    const [subjects, exams, students] = await Promise.all([
+      Subject.find({ id: { $in: subjectIds } }).lean(),
+      Examination.find({ id: { $in: examIds } }).lean(),
+      Student.find({ id: { $in: studentIds } }).lean()
+    ]);
+
+    const userIds = [...new Set(students.map(s => s.user_id))];
+    const users = await User.find({ id: { $in: userIds } }).lean();
+
+    const subMap = Object.fromEntries(subjects.map(s => [s.id, s]));
+    const examMap = Object.fromEntries(exams.map(e => [e.id, e]));
+    const stuMap = Object.fromEntries(students.map(s => [s.id, s]));
+    const userMap = Object.fromEntries(users.map(u => [u.id, u]));
+
+    const enriched = marksDocs
+      .map(em => {
+        const sub = subMap[em.subject_id];
+        const ex = examMap[em.exam_id];
+        const s = stuMap[em.student_id];
+        const u = s ? userMap[s.user_id] : null;
+        if (!sub || !ex || !s || !u) return null;
+        return {
+          ...em,
+          subject_code: sub.code,
+          subject_name: sub.name,
+          credits: sub.credits,
+          exam_name: ex.name,
+          exam_type: ex.exam_type,
+          exam_status: ex.status,
+          roll_no: s.roll_no,
+          enrollment_no: s.enrollment_no,
+          student_name: u.full_name
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => String(a.roll_no).localeCompare(String(b.roll_no)));
+
+    res.json(enriched);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
-
-  query += ' ORDER BY s.roll_no ASC';
-
-  const marks = db.prepare(query).all(...params);
-  res.json(marks);
 });
 
 // POST /api/exams/marks - Faculty marks entry with DB Scoping (internal/assignments)
-router.post('/marks', verifyToken, requirePermission('exams', 'enter_marks'), (req, res) => {
-  const { examId, subjectId, studentId, internalAssessment, assignmentScore, externalExam, remarks, reason } = req.body;
+router.post('/marks', verifyToken, requirePermission('exams', 'enter_marks'), async (req, res) => {
+  try {
+    const { examId, subjectId, studentId, internalAssessment, assignmentScore, externalExam, remarks, reason } = req.body;
 
-  if (!examId || !subjectId || !studentId) {
-    return res.status(400).json({ error: 'Exam ID, Subject ID, and Student ID are required' });
-  }
+    if (!examId || !subjectId || !studentId) {
+      return res.status(400).json({ error: 'Exam ID, Subject ID, and Student ID are required' });
+    }
 
-  // DB scoping check for Faculty: must be assigned to this subject
-  if (req.user.role === 'faculty') {
-    const isMapped = db.prepare(`
-      SELECT 1 FROM faculty_class_map 
-      WHERE faculty_id = ? AND subject_id = ?
-    `).get(req.faculty?.id, subjectId);
+    if (req.user.role === 'faculty') {
+      const isMapped = await FacultyClassMap.findOne({
+        faculty_id: req.faculty?.id,
+        subject_id: Number(subjectId)
+      }).lean();
 
-    if (!isMapped) {
-      return res.status(403).json({
-        error: 'Forbidden: You are not assigned to teach or evaluate this subject.'
+      if (!isMapped) {
+        return res.status(403).json({
+          error: 'Forbidden: You are not assigned to teach or evaluate this subject.'
+        });
+      }
+    }
+
+    const internal = Number(internalAssessment || 0);
+    const assignment = Number(assignmentScore || 0);
+    const external = Number(externalExam || 0);
+    const total = Number((internal + assignment + external).toFixed(1));
+    const gradeInfo = marksToGradePoint(total);
+
+    const existing = await ExamMark.findOne({
+      exam_id: Number(examId),
+      subject_id: Number(subjectId),
+      student_id: Number(studentId)
+    }).lean();
+
+    if (existing) {
+      await ExamMark.updateOne(
+        { id: existing.id },
+        {
+          $set: {
+            internal_assessment: internal,
+            assignment_score: assignment,
+            external_exam: external,
+            total_score: total,
+            letter_grade: gradeInfo.grade,
+            grade_points: gradeInfo.gp,
+            remarks: remarks || ''
+          }
+        }
+      );
+    } else {
+      const id = await getNextId('exam_marks');
+      await ExamMark.create({
+        id,
+        exam_id: Number(examId),
+        subject_id: Number(subjectId),
+        student_id: Number(studentId),
+        internal_assessment: internal,
+        assignment_score: assignment,
+        external_exam: external,
+        total_score: total,
+        letter_grade: gradeInfo.grade,
+        grade_points: gradeInfo.gp,
+        remarks: remarks || ''
       });
     }
-  }
 
-  const internal = Number(internalAssessment || 0);
-  const assignment = Number(assignmentScore || 0);
-  const external = Number(externalExam || 0);
-  const total = Number((internal + assignment + external).toFixed(1));
-
-  const gradeInfo = marksToGradePoint(total);
-
-  try {
-    const existing = db.prepare('SELECT * FROM exam_marks WHERE exam_id = ? AND subject_id = ? AND student_id = ?').get(examId, subjectId, studentId);
-
-    db.prepare(`
-      INSERT INTO exam_marks (
-        exam_id, subject_id, student_id, internal_assessment, assignment_score, external_exam,
-        total_score, letter_grade, grade_points, remarks
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(exam_id, subject_id, student_id) DO UPDATE SET
-        internal_assessment = excluded.internal_assessment,
-        assignment_score = excluded.assignment_score,
-        external_exam = excluded.external_exam,
-        total_score = excluded.total_score,
-        letter_grade = excluded.letter_grade,
-        grade_points = excluded.grade_points,
-        remarks = excluded.remarks
-    `).run(examId, subjectId, studentId, internal, assignment, external, total, gradeInfo.grade, gradeInfo.gp, remarks || '');
-
-    // If Admin performed an override/moderation on an existing score, log audit
     if (req.user.role === 'admin' && existing) {
-      logAudit({
+      await logAudit({
         userId: req.user.id,
         userRole: req.user.role,
         userEmail: req.user.email,
@@ -203,80 +275,95 @@ router.post('/marks', verifyToken, requirePermission('exams', 'enter_marks'), (r
 });
 
 // GET /api/exams/report-card/:studentId - Full official marksheet with DB scoping
-router.get('/report-card/:studentId', verifyToken, requirePermission('exams', 'read'), (req, res) => {
-  const targetStudentId = Number(req.params.studentId);
+router.get('/report-card/:studentId', verifyToken, requirePermission('exams', 'read'), async (req, res) => {
+  try {
+    const targetStudentId = Number(req.params.studentId);
 
-  // DB scoping check
-  if (req.user.role === 'student') {
-    if (!req.student || req.student.id !== targetStudentId) {
-      return res.status(403).json({ error: 'Access denied: Students can only view their own marksheet.' });
+    if (req.user.role === 'student') {
+      if (!req.student || req.student.id !== targetStudentId) {
+        return res.status(403).json({ error: 'Access denied: Students can only view their own marksheet.' });
+      }
+    } else if (req.user.role === 'parent') {
+      const isWard = await WardLink.findOne({ parent_user_id: req.user.id, student_id: targetStudentId }).lean();
+      if (!isWard) {
+        return res.status(403).json({ error: 'Access denied: You can only view marksheets of your linked wards.' });
+      }
     }
-  } else if (req.user.role === 'parent') {
-    const isWard = db.prepare('SELECT 1 FROM ward_links WHERE parent_user_id = ? AND student_id = ?').get(req.user.id, targetStudentId);
-    if (!isWard) {
-      return res.status(403).json({ error: 'Access denied: You can only view marksheets of your linked wards.' });
+
+    const s = await Student.findOne({ id: targetStudentId }).lean();
+    if (!s) {
+      return res.status(404).json({ error: 'Student not found' });
     }
+
+    const [u, c, d, marksDocs] = await Promise.all([
+      User.findOne({ id: s.user_id }).lean(),
+      Course.findOne({ id: s.course_id }).lean(),
+      Department.findOne({ id: s.department_id }).lean(),
+      ExamMark.find({ student_id: s.id }).lean()
+    ]);
+
+    const subjectIds = [...new Set(marksDocs.map(m => m.subject_id))];
+    const examIds = [...new Set(marksDocs.map(m => m.exam_id))];
+    const [subjects, exams] = await Promise.all([
+      Subject.find({ id: { $in: subjectIds } }).lean(),
+      Examination.find({ id: { $in: examIds } }).lean()
+    ]);
+
+    const subMap = Object.fromEntries(subjects.map(sub => [sub.id, sub]));
+    const examSet = new Set(exams.map(ex => ex.id));
+
+    const marksList = marksDocs
+      .filter(em => subMap[em.subject_id] && examSet.has(em.exam_id))
+      .map(em => {
+        const sub = subMap[em.subject_id];
+        return {
+          ...em,
+          subject_code: sub.code,
+          subject_name: sub.name,
+          credits: sub.credits,
+          subject_type: sub.type
+        };
+      })
+      .sort((a, b) => String(a.subject_code).localeCompare(String(b.subject_code)));
+
+    let totalCredits = 0;
+    let weightedPoints = 0;
+
+    marksList.forEach(m => {
+      totalCredits += m.credits;
+      weightedPoints += (m.grade_points * m.credits);
+    });
+
+    const sgpa = totalCredits > 0 ? Number((weightedPoints / totalCredits).toFixed(2)) : s.current_cgpa;
+
+    res.json({
+      institution: {
+        name: 'Guru Tegh Bahadur Institute of Technology (GTBIT)',
+        affiliate: 'Guru Gobind Singh Indraprastha University (GGSIPU), New Delhi',
+        accreditation: 'Approved by AICTE, NAAC Accredited'
+      },
+      student: {
+        id: s.id,
+        name: u?.full_name || '',
+        roll_no: s.roll_no,
+        enrollment_no: s.enrollment_no,
+        course: c?.name || '',
+        department: d?.name || '',
+        semester: s.semester,
+        section: s.section,
+        current_cgpa: s.current_cgpa
+      },
+      academic_metrics: {
+        semester_credits: totalCredits,
+        semester_sgpa: sgpa,
+        cumulative_cgpa: s.current_cgpa,
+        status: sgpa >= 5.0 ? 'PASSED' : 'REAPPEAR'
+      },
+      subjects: marksList
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
-
-  const student = db.prepare(`
-    SELECT s.*, u.full_name as student_name, u.email as student_email,
-           c.name as course_name, c.code as course_code,
-           d.name as department_name
-    FROM students s
-    JOIN users u ON s.user_id = u.id
-    JOIN courses c ON s.course_id = c.id
-    JOIN departments d ON s.department_id = d.id
-    WHERE s.id = ?
-  `).get(targetStudentId);
-
-  if (!student) {
-    return res.status(404).json({ error: 'Student not found' });
-  }
-
-  const marksList = db.prepare(`
-    SELECT em.*, sub.code as subject_code, sub.name as subject_name, sub.credits, sub.type as subject_type
-    FROM exam_marks em
-    JOIN subjects sub ON em.subject_id = sub.id
-    JOIN examinations ex ON em.exam_id = ex.id
-    WHERE em.student_id = ?
-    ORDER BY sub.code ASC
-  `).all(student.id);
-
-  let totalCredits = 0;
-  let weightedPoints = 0;
-
-  marksList.forEach(m => {
-    totalCredits += m.credits;
-    weightedPoints += (m.grade_points * m.credits);
-  });
-
-  const sgpa = totalCredits > 0 ? Number((weightedPoints / totalCredits).toFixed(2)) : student.current_cgpa;
-
-  res.json({
-    institution: {
-      name: 'Guru Tegh Bahadur Institute of Technology (GTBIT)',
-      affiliate: 'Guru Gobind Singh Indraprastha University (GGSIPU), New Delhi',
-      accreditation: 'Approved by AICTE, NAAC Accredited'
-    },
-    student: {
-      id: student.id,
-      name: student.student_name,
-      roll_no: student.roll_no,
-      enrollment_no: student.enrollment_no,
-      course: student.course_name,
-      department: student.department_name,
-      semester: student.semester,
-      section: student.section,
-      current_cgpa: student.current_cgpa
-    },
-    academic_metrics: {
-      semester_credits: totalCredits,
-      semester_sgpa: sgpa,
-      cumulative_cgpa: student.current_cgpa,
-      status: sgpa >= 5.0 ? 'PASSED' : 'REAPPEAR'
-    },
-    subjects: marksList
-  });
 });
 
 module.exports = router;

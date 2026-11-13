@@ -5,7 +5,14 @@
  */
 
 const jwt = require('jsonwebtoken');
-const db = require('../src/db/database');
+const {
+  connectDB,
+  mongoose,
+  User,
+  Student,
+  AttendanceRecord,
+  Examination
+} = require('../src/db/database');
 const { JWT_SECRET } = require('../src/middleware/authMiddleware');
 
 function createToken(userId, email, role) {
@@ -13,16 +20,20 @@ function createToken(userId, email, role) {
 }
 
 async function runTests() {
+  await connectDB();
+
   console.log('=================================================================');
   console.log('🛡️  STARTING RBAC ROLE BOUNDARY AND PERMISSION TEST SUITE');
   console.log('=================================================================\n');
 
   // Fetch test users from database
-  const adminUser = db.prepare("SELECT * FROM users WHERE role = 'admin' LIMIT 1").get();
-  const facultyNandi = db.prepare("SELECT * FROM users WHERE email = 'faculty.nandi@gtbit.ac.in'").get();
-  const studentTej = db.prepare("SELECT * FROM users WHERE email = 'tejassveer@gtbit.ac.in'").get();
-  const studentAman = db.prepare("SELECT * FROM users WHERE email = 'aman.gupta@gtbit.ac.in'").get();
-  const parentJaswinder = db.prepare("SELECT * FROM users WHERE email = 'parent.tejassveer@gmail.com'").get();
+  const [adminUser, facultyNandi, studentTej, studentAman, parentJaswinder] = await Promise.all([
+    User.findOne({ role: 'admin' }).lean(),
+    User.findOne({ email: 'faculty.nandi@gtbit.ac.in' }).lean(),
+    User.findOne({ email: 'tejassveer@gtbit.ac.in' }).lean(),
+    User.findOne({ email: 'aman.gupta@gtbit.ac.in' }).lean(),
+    User.findOne({ email: 'parent.tejassveer@gmail.com' }).lean()
+  ]);
 
   const adminToken = createToken(adminUser.id, adminUser.email, 'admin');
   const facultyToken = createToken(facultyNandi.id, facultyNandi.email, 'faculty');
@@ -30,10 +41,12 @@ async function runTests() {
   const parentToken = createToken(parentJaswinder.id, parentJaswinder.email, 'parent');
 
   // Fetch dynamic fixture IDs
-  const studentTejRecord = db.prepare("SELECT id FROM students WHERE user_id = ?").get(studentTej.id);
-  const studentAmanRecord = db.prepare("SELECT id FROM students WHERE user_id = ?").get(studentAman.id);
-  const sampleAttRecord = db.prepare("SELECT id FROM attendance_records LIMIT 1").get();
-  const sampleExamRecord = db.prepare("SELECT id FROM examinations LIMIT 1").get();
+  const [studentTejRecord, studentAmanRecord, sampleAttRecord, sampleExamRecord] = await Promise.all([
+    Student.findOne({ user_id: studentTej.id }).lean(),
+    Student.findOne({ user_id: studentAman.id }).lean(),
+    AttendanceRecord.findOne({}).lean(),
+    Examination.findOne({}).lean()
+  ]);
 
   const BASE_URL = 'http://localhost:5000/api';
 
@@ -243,6 +256,8 @@ async function runTests() {
   console.log('\n=================================================================');
   console.log(`🏁 RBAC TEST RESULTS: ${passCount} PASSED, ${failCount} FAILED (Total: ${passCount + failCount})`);
   console.log('=================================================================\n');
+
+  await mongoose.disconnect();
 
   if (failCount > 0) {
     process.exit(1);

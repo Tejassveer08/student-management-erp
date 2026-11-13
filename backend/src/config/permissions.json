@@ -13,6 +13,8 @@
     "hostel": ["read", "create", "update", "delete"],
     "placements": ["read", "create", "update", "delete"],
     "engagement": ["read", "create", "update", "delete"],
+    "societies": ["read", "create", "update", "delete", "decide_membership", "decide_attendance"],
+    "forum": ["read", "create", "reply", "like", "verify", "delete"],
     "settings": ["read", "update"],
     "audit_logs": ["read"]
   },
@@ -30,6 +32,8 @@
     "hostel": ["read"],
     "placements": ["read"],
     "engagement": ["read"],
+    "societies": ["read", "decide_attendance"],
+    "forum": ["read", "create", "reply", "like", "verify"],
     "settings": [],
     "audit_logs": []
   },
@@ -47,6 +51,8 @@
     "hostel": ["read"],
     "placements": ["read"],
     "engagement": ["read"],
+    "societies": ["read"],
+    "forum": [],
     "settings": [],
     "audit_logs": []
   },
@@ -64,6 +70,8 @@
     "hostel": ["read"],
     "placements": ["read", "apply"],
     "engagement": ["read"],
+    "societies": ["read", "apply", "request_attendance", "decide_membership"],
+    "forum": ["read", "create", "reply", "like"],
     "settings": [],
     "audit_logs": []
   }

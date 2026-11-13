@@ -17,7 +17,9 @@ import {
   ShieldCheck,
   Sparkles,
   ChevronRight,
-  Zap
+  Zap,
+  MessageSquare,
+  Flag
 } from 'lucide-react';
 
 export default function Sidebar({ currentTab, setCurrentTab }) {
@@ -59,7 +61,9 @@ export default function Sidebar({ currentTab, setCurrentTab }) {
       group: 'Campus',
       items: [
         { id: 'library-hostel', label: 'Library & Hostel', icon: BookOpen, module: 'library' },
-        { id: 'placements', label: 'Placements & TnP', icon: Briefcase, module: 'placements' }
+        { id: 'placements', label: 'Placements & TnP', icon: Briefcase, module: 'placements' },
+        { id: 'societies', label: 'Societies & Duty', icon: Flag, module: 'societies' },
+        { id: 'forum', label: 'Student-Faculty Forum', icon: MessageSquare, module: 'forum' }
       ]
     },
     {

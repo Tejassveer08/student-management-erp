@@ -346,9 +346,16 @@ export default function EngagementView() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
           <div className="glass-panel" style={{ padding: '1.5rem' }}>
             <div style={{ marginBottom: '1.25rem' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <Brain size={22} color="var(--primary)" />
-                <h3 style={{ fontSize: '1.2rem' }}>AI-Powered Skill & Career Recommendations</h3>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <Brain size={22} color="var(--primary)" />
+                  <h3 style={{ fontSize: '1.2rem' }}>AI-Powered Skill & Career Recommendations</h3>
+                </div>
+                <span className={`badge ${careerRecs?.ai_provider?.startsWith('groq:') ? 'badge-success' : 'badge-info'}`}>
+                  {careerRecs?.ai_provider?.startsWith('groq:')
+                    ? `Powered by Groq (${careerRecs.ai_provider.replace('groq:', '')})`
+                    : 'Rule-Based Engine (Set GROQ_API_KEY in backend/.env for live LLM)'}
+                </span>
               </div>
               <p style={{ fontSize: '0.825rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
                 Derived from your academic performance trends, coursework strengths in OS, Networks, Algorithms & AI, and placement requirements.

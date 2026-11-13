@@ -138,6 +138,8 @@ CREATE TABLE IF NOT EXISTS attendance_records (
   status ENUM('Present', 'Absent', 'Late') NOT NULL,
   method ENUM('Faculty_Manual', 'QR_Scan', 'One_Tap') DEFAULT 'Faculty_Manual',
   marked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  credit_type ENUM('Regular', 'Society') NOT NULL DEFAULT 'Regular',
+  society_request_id INT NULL,
   UNIQUE KEY unique_session_student (session_id, student_id),
   FOREIGN KEY (session_id) REFERENCES attendance_sessions(id) ON DELETE CASCADE,
   FOREIGN KEY (student_id) REFERENCES students(id) ON DELETE CASCADE
@@ -438,5 +440,109 @@ CREATE TABLE IF NOT EXISTS institution_settings (
   updated_by INT,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB;
+
+-- 26. Societies (GTBIT Student Societies)
+CREATE TABLE IF NOT EXISTS societies (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(150) NOT NULL UNIQUE,
+  description TEXT,
+  category VARCHAR(80) DEFAULT 'General',
+  coordinator_student_id INT NULL,
+  coordinator_faculty_id INT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (coordinator_student_id) REFERENCES students(id) ON DELETE SET NULL,
+  FOREIGN KEY (coordinator_faculty_id) REFERENCES faculty(id) ON DELETE SET NULL
+) ENGINE=InnoDB;
+
+-- 27. Society Members & Applications
+CREATE TABLE IF NOT EXISTS society_members (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  society_id INT NOT NULL,
+  student_id INT NOT NULL,
+  status ENUM('pending', 'approved', 'rejected') NOT NULL DEFAULT 'pending',
+  application_message TEXT,
+  applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  decided_at TIMESTAMP NULL,
+  decided_by INT NULL,
+  UNIQUE KEY unique_society_student (society_id, student_id),
+  FOREIGN KEY (society_id) REFERENCES societies(id) ON DELETE CASCADE,
+  FOREIGN KEY (student_id) REFERENCES students(id) ON DELETE CASCADE,
+  FOREIGN KEY (decided_by) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB;
+
+-- 28. Society Duty Attendance Exemption Requests
+CREATE TABLE IF NOT EXISTS society_attendance_requests (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  student_id INT NOT NULL,
+  society_id INT NOT NULL,
+  class_subject_id INT NOT NULL,
+  date DATE NOT NULL,
+  session_period VARCHAR(60) NULL,
+  activity_title VARCHAR(200) NOT NULL,
+  reason TEXT,
+  status ENUM('pending', 'approved', 'rejected') NOT NULL DEFAULT 'pending',
+  assigned_faculty_id INT NULL,
+  reviewed_by_faculty_id INT NULL,
+  reviewer_remarks TEXT,
+  reviewed_at TIMESTAMP NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_sar_faculty_status (assigned_faculty_id, status),
+  INDEX idx_sar_student (student_id),
+  FOREIGN KEY (student_id) REFERENCES students(id) ON DELETE CASCADE,
+  FOREIGN KEY (society_id) REFERENCES societies(id) ON DELETE CASCADE,
+  FOREIGN KEY (class_subject_id) REFERENCES subjects(id) ON DELETE CASCADE,
+  FOREIGN KEY (assigned_faculty_id) REFERENCES faculty(id) ON DELETE SET NULL,
+  FOREIGN KEY (reviewed_by_faculty_id) REFERENCES faculty(id) ON DELETE SET NULL
+) ENGINE=InnoDB;
+
+ALTER TABLE attendance_records
+  ADD CONSTRAINT fk_att_society_req
+  FOREIGN KEY (society_request_id) REFERENCES society_attendance_requests(id) ON DELETE SET NULL;
+
+-- 29. Student-Teacher Forum Threads (also backs society applicant <-> coordinator chat)
+CREATE TABLE IF NOT EXISTS forum_threads (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  author_id INT NOT NULL,
+  author_role VARCHAR(30) NOT NULL,
+  scope ENUM('general', 'subject', 'society') NOT NULL DEFAULT 'general',
+  subject_id INT NULL,
+  society_id INT NULL,
+  title VARCHAR(255) NOT NULL,
+  is_resolved TINYINT(1) DEFAULT 0,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  last_activity_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_forum_threads_scope (scope, subject_id),
+  FOREIGN KEY (author_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (subject_id) REFERENCES subjects(id) ON DELETE CASCADE,
+  FOREIGN KEY (society_id) REFERENCES societies(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+-- 30. Forum Posts & Replies
+CREATE TABLE IF NOT EXISTS forum_posts (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  thread_id INT NOT NULL,
+  parent_post_id INT NULL,
+  author_id INT NOT NULL,
+  author_role VARCHAR(30) NOT NULL,
+  body TEXT NOT NULL,
+  is_faculty_answer TINYINT(1) DEFAULT 0,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_forum_posts_thread (thread_id),
+  FOREIGN KEY (thread_id) REFERENCES forum_threads(id) ON DELETE CASCADE,
+  FOREIGN KEY (parent_post_id) REFERENCES forum_posts(id) ON DELETE CASCADE,
+  FOREIGN KEY (author_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+-- 31. Forum Likes
+CREATE TABLE IF NOT EXISTS forum_likes (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  post_id INT NOT NULL,
+  user_id INT NOT NULL,
+  user_role VARCHAR(30) NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY unique_post_user_like (post_id, user_id),
+  FOREIGN KEY (post_id) REFERENCES forum_posts(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB;
 

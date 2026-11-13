@@ -16,6 +16,8 @@ import NoticesView from './views/NoticesView';
 import LibraryHostelView from './views/LibraryHostelView';
 import PlacementsView from './views/PlacementsView';
 import EngagementView from './views/EngagementView';
+import SocietiesView from './views/SocietiesView';
+import ForumView from './views/ForumView';
 import SettingsView from './views/SettingsView';
 import LoginView from './views/LoginView';
 import { ShieldAlert, ArrowLeft, Home, ChevronRight, Sparkles } from 'lucide-react';
@@ -34,6 +36,8 @@ const TAB_PERMISSIONS = {
   'library-hostel': 'library',
   'placements': 'placements',
   'engagement': 'engagement',
+  'societies': 'societies',
+  'forum': 'forum',
   'settings': 'settings'
 };
 
@@ -51,6 +55,8 @@ const TAB_LABELS = {
   'library-hostel': 'Library & Hostel Administration',
   'placements': 'Placements & Internship Cell',
   'engagement': 'Merit Leaderboard & AI Guide',
+  'societies': 'Campus Societies & Duty Attendance',
+  'forum': 'Student-Teacher Q&A Forum',
   'settings': 'Institutional Governance & Audit Logs'
 };
 
@@ -174,6 +180,8 @@ function MainApp() {
       case 'library-hostel': return <LibraryHostelView />;
       case 'placements': return <PlacementsView />;
       case 'engagement': return <EngagementView />;
+      case 'societies': return <SocietiesView onNavigate={handleTabChange} />;
+      case 'forum': return <ForumView />;
       case 'settings': return <SettingsView />;
       default: return <DashboardView onNavigate={handleTabChange} />;
     }

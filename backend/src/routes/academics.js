@@ -1,152 +1,153 @@
 const express = require('express');
-const db = require('../db/database');
+const { Department, Course, Subject, Faculty, User, TimetableSlot, getNextId } = require('../db/database');
 const { verifyToken, requireRoles } = require('../middleware/authMiddleware');
 
 const router = express.Router();
 
+const DAY_ORDER = { Monday: 1, Tuesday: 2, Wednesday: 3, Thursday: 4, Friday: 5, Saturday: 6, Sunday: 7 };
+
 // GET /api/academics/departments
-router.get('/departments', verifyToken, (req, res) => {
-  const depts = db.prepare('SELECT * FROM departments ORDER BY name ASC').all();
+router.get('/departments', verifyToken, async (req, res) => {
+  const depts = await Department.find().sort({ name: 1 }).lean();
   res.json(depts);
 });
 
 // GET /api/academics/courses
-router.get('/courses', verifyToken, (req, res) => {
-  const courses = db.prepare(`
-    SELECT c.*, d.name as department_name, d.code as department_code
-    FROM courses c
-    JOIN departments d ON c.department_id = d.id
-    ORDER BY c.name ASC
-  `).all();
-  res.json(courses);
+router.get('/courses', verifyToken, async (req, res) => {
+  const [courses, depts] = await Promise.all([
+    Course.find().sort({ name: 1 }).lean(),
+    Department.find().lean()
+  ]);
+  const dMap = Object.fromEntries(depts.map(d => [d.id, d]));
+  res.json(courses.map(c => ({
+    ...c,
+    department_name: dMap[c.department_id]?.name,
+    department_code: dMap[c.department_id]?.code
+  })));
 });
 
 // GET /api/academics/subjects
-router.get('/subjects', verifyToken, (req, res) => {
+router.get('/subjects', verifyToken, async (req, res) => {
   const { semester, departmentId } = req.query;
-  let query = `
-    SELECT s.*, c.name as course_name, 
-           u.full_name as faculty_name, f.employee_id as faculty_employee_id
-    FROM subjects s
-    JOIN courses c ON s.course_id = c.id
-    LEFT JOIN faculty f ON s.faculty_id = f.id
-    LEFT JOIN users u ON f.user_id = u.id
-    WHERE 1=1
-  `;
-  const params = [];
+  const filter = {};
+  if (semester) filter.semester = Number(semester);
 
-  if (semester) {
-    query += ' AND s.semester = ?';
-    params.push(Number(semester));
-  }
+  const [subjects, courses, faculties, users] = await Promise.all([
+    Subject.find(filter).sort({ code: 1 }).lean(),
+    Course.find().lean(),
+    Faculty.find().lean(),
+    User.find({ role: 'faculty' }, 'id full_name').lean()
+  ]);
 
+  const cMap = Object.fromEntries(courses.map(c => [c.id, c]));
+  const fMap = Object.fromEntries(faculties.map(f => [f.id, f]));
+  const uMap = Object.fromEntries(users.map(u => [u.id, u]));
+
+  let list = subjects;
   if (departmentId) {
-    query += ' AND c.department_id = ?';
-    params.push(Number(departmentId));
+    const dId = Number(departmentId);
+    list = list.filter(s => cMap[s.course_id]?.department_id === dId);
   }
 
-  query += ' ORDER BY s.code ASC';
-
-  const subjects = db.prepare(query).all(...params);
-  res.json(subjects);
+  res.json(list.map(s => {
+    const fac = fMap[s.faculty_id];
+    return {
+      ...s,
+      course_name: cMap[s.course_id]?.name,
+      faculty_name: fac ? uMap[fac.user_id]?.full_name : null,
+      faculty_employee_id: fac ? fac.employee_id : null
+    };
+  }));
 });
 
-// POST /api/academics/subjects (Admin only)
-router.post('/subjects', verifyToken, requireRoles('admin'), (req, res) => {
+// POST /api/academics/subjects
+router.post('/subjects', verifyToken, requireRoles('admin'), async (req, res) => {
   const { courseId, code, name, semester, credits, type, facultyId, syllabusOutline, difficultyIndex } = req.body;
-
   if (!code || !name || !semester) {
     return res.status(400).json({ error: 'Subject code, name, and semester are required' });
   }
 
   try {
-    const result = db.prepare(`
-      INSERT INTO subjects (course_id, code, name, semester, credits, type, faculty_id, syllabus_outline, difficulty_index)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      courseId || 1,
-      code.toUpperCase().trim(),
-      name.trim(),
-      semester,
-      credits || 4,
-      type || 'Theory',
-      facultyId || null,
-      syllabusOutline || '',
-      difficultyIndex || 0.50
-    );
-
-    res.status(201).json({ message: 'Subject created successfully', subjectId: result.lastInsertRowid });
+    const id = await getNextId('subjects');
+    await Subject.create({
+      id,
+      course_id: courseId || 1,
+      code: code.toUpperCase().trim(),
+      name: name.trim(),
+      semester: Number(semester),
+      credits: credits || 4,
+      type: type || 'Theory',
+      faculty_id: facultyId || null,
+      syllabus_outline: syllabusOutline || '',
+      difficulty_index: difficultyIndex || 0.50
+    });
+    res.status(201).json({ message: 'Subject created successfully', subjectId: id });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
 });
 
 // GET /api/academics/timetable
-router.get('/timetable', verifyToken, (req, res) => {
+router.get('/timetable', verifyToken, async (req, res) => {
   const { semester, section, facultyId, day } = req.query;
+  const filter = {};
+  if (semester) filter.semester = Number(semester);
+  if (section) filter.section = section;
+  if (facultyId) filter.faculty_id = Number(facultyId);
+  if (day) filter.day_of_week = day;
 
-  let query = `
-    SELECT ts.*, sub.name as subject_name, sub.code as subject_code, sub.type as subject_type,
-           u.full_name as faculty_name
-    FROM timetable_slots ts
-    JOIN subjects sub ON ts.subject_id = sub.id
-    JOIN faculty f ON ts.faculty_id = f.id
-    JOIN users u ON f.user_id = u.id
-    WHERE 1=1
-  `;
-  const params = [];
+  const [slots, subjects, faculties, users] = await Promise.all([
+    TimetableSlot.find(filter).lean(),
+    Subject.find().lean(),
+    Faculty.find().lean(),
+    User.find({ role: 'faculty' }, 'id full_name').lean()
+  ]);
 
-  if (semester) {
-    query += ' AND ts.semester = ?';
-    params.push(Number(semester));
-  }
+  const subMap = Object.fromEntries(subjects.map(s => [s.id, s]));
+  const facMap = Object.fromEntries(faculties.map(f => [f.id, f]));
+  const uMap = Object.fromEntries(users.map(u => [u.id, u]));
 
-  if (section) {
-    query += ' AND ts.section = ?';
-    params.push(section);
-  }
+  const result = slots.map(ts => {
+    const sub = subMap[ts.subject_id] || {};
+    const fac = facMap[ts.faculty_id] || {};
+    return {
+      ...ts,
+      subject_name: sub.name,
+      subject_code: sub.code,
+      subject_type: sub.type,
+      faculty_name: uMap[fac.user_id]?.full_name
+    };
+  });
 
-  if (facultyId) {
-    query += ' AND ts.faculty_id = ?';
-    params.push(Number(facultyId));
-  }
+  result.sort((a, b) => {
+    const dDiff = (DAY_ORDER[a.day_of_week] || 9) - (DAY_ORDER[b.day_of_week] || 9);
+    return dDiff !== 0 ? dDiff : String(a.start_time).localeCompare(String(b.start_time));
+  });
 
-  if (day) {
-    query += ' AND ts.day_of_week = ?';
-    params.push(day);
-  }
-
-  query += `
-    ORDER BY 
-      CASE ts.day_of_week
-        WHEN 'Monday' THEN 1
-        WHEN 'Tuesday' THEN 2
-        WHEN 'Wednesday' THEN 3
-        WHEN 'Thursday' THEN 4
-        WHEN 'Friday' THEN 5
-        ELSE 6
-      END, ts.start_time ASC
-  `;
-
-  const slots = db.prepare(query).all(...params);
-  res.json(slots);
+  res.json(result);
 });
 
-// POST /api/academics/timetable (Admin/Faculty only)
-router.post('/timetable', verifyToken, requireRoles('admin', 'faculty'), (req, res) => {
+// POST /api/academics/timetable
+router.post('/timetable', verifyToken, requireRoles('admin', 'faculty'), async (req, res) => {
   const { subjectId, facultyId, semester, section, dayOfWeek, startTime, endTime, roomNo } = req.body;
-
   if (!subjectId || !facultyId || !dayOfWeek || !startTime || !endTime || !roomNo) {
     return res.status(400).json({ error: 'All schedule slot fields are required' });
   }
 
   try {
-    const result = db.prepare(`
-      INSERT INTO timetable_slots (subject_id, faculty_id, semester, section, day_of_week, start_time, end_time, room_no)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(subjectId, facultyId, semester || 4, section || 'CSE-2', dayOfWeek, startTime, endTime, roomNo);
-
-    res.status(201).json({ message: 'Timetable slot created successfully', slotId: result.lastInsertRowid });
+    const id = await getNextId('timetable_slots');
+    await TimetableSlot.create({
+      id,
+      subject_id: Number(subjectId),
+      faculty_id: Number(facultyId),
+      semester: semester || 4,
+      section: section || 'CSE-2',
+      day_of_week: dayOfWeek,
+      start_time: startTime,
+      end_time: endTime,
+      room_no: roomNo
+    });
+    res.status(201).json({ message: 'Timetable slot created successfully', slotId: id });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
