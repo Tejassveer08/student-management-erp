@@ -338,33 +338,46 @@ export default function DashboardView({ onNavigate }) {
                 <AlertTriangle size={18} color="var(--danger)" />
                 <h3 style={{ fontSize: '1rem', fontWeight: 700 }}>Early-Warning Risk Cohort</h3>
               </div>
-              <span className="badge badge-danger">1 Student Below {threshold}%</span>
+              <span className="badge badge-danger">
+                {stats.at_risk_students_count || 0} {(stats.at_risk_students_count || 0) === 1 ? 'Student' : 'Students'} Below {threshold}%
+              </span>
             </div>
 
             <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.85rem' }}>
               Students flagged by the CGPA Probability Engine & Smart Attendance Tracker who breach the institutional detention threshold:
             </p>
 
-            <div style={{
-              padding: '0.85rem 1rem',
-              borderRadius: 'var(--radius-md)',
-              background: 'var(--danger-bg)',
-              border: '1px solid var(--danger-border)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between'
-            }}>
-              <div>
-                <div style={{ fontWeight: 700, fontSize: '0.9rem', color: 'var(--danger)' }}>
-                  Aman Gupta (Roll: 012/CSE2/2023)
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem', maxHeight: '280px', overflowY: 'auto', paddingRight: '0.25rem' }}>
+              {(data.at_risk_students || []).length === 0 ? (
+                <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem', padding: '1rem', textAlign: 'center' }}>
+                  No students currently below {threshold}% attendance.
                 </div>
-                <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.2rem' }}>
-                  Live Attendance: <strong>67.5%</strong> (&lt; {threshold}% threshold) • High Risk in Algo
-                </div>
-              </div>
-              <button onClick={() => onNavigate('cgpa-simulator')} className="btn btn-danger btn-sm">
-                Inspect Risk
-              </button>
+              ) : (
+                (data.at_risk_students || []).map((st) => (
+                  <div key={st.id} style={{
+                    padding: '0.75rem 1rem',
+                    borderRadius: 'var(--radius-md)',
+                    background: 'var(--danger-bg)',
+                    border: '1px solid var(--danger-border)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: '0.75rem'
+                  }}>
+                    <div>
+                      <div style={{ fontWeight: 700, fontSize: '0.9rem', color: 'var(--danger)' }}>
+                        {st.full_name} (Roll: {st.roll_no})
+                      </div>
+                      <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.2rem' }}>
+                        Live Attendance: <strong>{st.attendance_pct}%</strong> (&lt; {threshold}% threshold) • {st.section} (Sem {st.semester}) • CGPA {st.current_cgpa}
+                      </div>
+                    </div>
+                    <button onClick={() => onNavigate('cgpa-simulator')} className="btn btn-danger btn-sm">
+                      Inspect Risk
+                    </button>
+                  </div>
+                ))
+              )}
             </div>
           </div>
 

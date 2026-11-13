@@ -107,6 +107,61 @@ router.get('/summary', verifyToken, async (req, res) => {
       const overallAttPct = att.total > 0 ? Number(((att.present / att.total) * 100).toFixed(1)) : 88.0;
       const atRiskCount = atRiskAgg[0]?.count || 0;
       const threshold = thresholdSetting ? parseFloat(thresholdSetting.setting_value) : 75.0;
+      const thresholdRatio = threshold / 100;
+
+      const atRiskRows = await AttendanceRecord.aggregate([
+        {
+          $group: {
+            _id: '$student_id',
+            total: { $sum: 1 },
+            present: {
+              $sum: { $cond: [{ $eq: ['$status', 'Present'] }, 1, 0] }
+            }
+          }
+        },
+        {
+          $project: {
+            pct: {
+              $cond: [
+                { $gt: ['$total', 0] },
+                { $divide: ['$present', '$total'] },
+                1
+              ]
+            }
+          }
+        },
+        { $match: { pct: { $lt: thresholdRatio } } },
+        { $sort: { pct: 1 } },
+        { $limit: 25 }
+      ]);
+
+      const riskStudentIds = atRiskRows.map(r => r._id);
+      const riskStudentsDocs = riskStudentIds.length
+        ? await Student.find({ id: { $in: riskStudentIds } }).lean()
+        : [];
+      const riskUserIds = riskStudentsDocs.map(s => s.user_id);
+      const riskUsersDocs = riskUserIds.length
+        ? await User.find({ id: { $in: riskUserIds } }).lean()
+        : [];
+      const riskStMap = Object.fromEntries(riskStudentsDocs.map(s => [s.id, s]));
+      const riskUserMap = Object.fromEntries(riskUsersDocs.map(u => [u.id, u]));
+
+      const atRiskStudents = atRiskRows
+        .map(r => {
+          const st = riskStMap[r._id];
+          if (!st) return null;
+          const u = riskUserMap[st.user_id];
+          return {
+            id: st.id,
+            full_name: u?.full_name || 'Student',
+            roll_no: st.roll_no,
+            section: st.section,
+            semester: st.semester,
+            current_cgpa: st.current_cgpa,
+            attendance_pct: Number((r.pct * 100).toFixed(1))
+          };
+        })
+        .filter(Boolean);
 
       return res.json({
         role: 'admin',
@@ -123,6 +178,7 @@ router.get('/summary', verifyToken, async (req, res) => {
           at_risk_students_count: atRiskCount,
           regulatory_threshold: threshold
         },
+        at_risk_students: atRiskStudents,
         recent_audit_logs: recentAuditLogs,
         recent_notices: recentNotices,
         examinations: exams
