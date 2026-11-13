@@ -67,12 +67,37 @@ async function getFullUserContext(user) {
 router.post('/login', async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) {
-    return res.status(400).json({ error: 'Email and password are required' });
+    return res.status(400).json({ error: 'ID / Email and password are required' });
   }
 
-  const user = await User.findOne({ email: email.toLowerCase().trim() }).lean();
+  const rawId = String(email).trim();
+  let user = await User.findOne({ email: rawId.toLowerCase() }).lean();
+
+  if (!user) {
+    const escaped = rawId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const studentByRoll = await Student.findOne({
+      $or: [
+        { roll_no: { $regex: `^${escaped}$`, $options: 'i' } },
+        { enrollment_no: rawId }
+      ]
+    }).lean();
+    if (studentByRoll) {
+      user = await User.findOne({ id: studentByRoll.user_id }).lean();
+    }
+  }
+
+  if (!user) {
+    const escaped = rawId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const facByEmp = await Faculty.findOne({
+      employee_id: { $regex: `^${escaped}$`, $options: 'i' }
+    }).lean();
+    if (facByEmp) {
+      user = await User.findOne({ id: facByEmp.user_id }).lean();
+    }
+  }
+
   if (!user || !bcrypt.compareSync(password, user.password_hash)) {
-    return res.status(401).json({ error: 'Invalid email or password' });
+    return res.status(401).json({ error: 'Invalid ID/email or password' });
   }
 
   const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '7d' });

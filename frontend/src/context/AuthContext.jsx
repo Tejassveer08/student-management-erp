@@ -35,13 +35,6 @@ export function AuthProvider({ children }) {
   useEffect(() => {
     async function loadUser() {
       if (!token) {
-        // If user explicitly logged out, stay on login screen
-        if (hasLoggedOut.current) {
-          setLoading(false);
-          return;
-        }
-        // First visit with no token — auto-login for demo convenience
-        await quickSwitchRole('student');
         setLoading(false);
         return;
       }

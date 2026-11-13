@@ -18,13 +18,12 @@ import {
 } from 'lucide-react';
 
 export default function LoginView() {
-  const { login, quickSwitchRole } = useAuth();
+  const { login } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [hoveredDemo, setHoveredDemo] = useState(null);
 
   const handleManualLogin = async (e) => {
     e.preventDefault();
@@ -38,15 +37,6 @@ export default function LoginView() {
       setLoading(false);
     }
   };
-
-  const demoAccounts = [
-    { role: 'student', label: 'Student (Tejassveer)', email: 'tejassveer@gtbit.ac.in', pass: 'student123', icon: GraduationCap, color: '#2563eb', gradient: 'linear-gradient(135deg, #2563eb 0%, #60a5fa 100%)', desc: 'Roll: 071/CSE2/2023 • 8.78 CGPA' },
-    { role: 'student', label: 'Student (Dev Sharma)', email: 'dev.sharma@gtbit.ac.in', pass: 'student123', icon: GraduationCap, color: '#06b6d4', gradient: 'linear-gradient(135deg, #06b6d4 0%, #67e8f9 100%)', desc: 'Roll: 605/CSE2/2023 • 8.45 CGPA' },
-    { role: 'student', label: 'Student (Aman - Risk)', email: 'aman.gupta@gtbit.ac.in', pass: 'student123', icon: AlertTriangle, color: '#ef4444', gradient: 'linear-gradient(135deg, #ef4444 0%, #f87171 100%)', desc: 'Attendance 67.5% (< 75% Risk)' },
-    { role: 'faculty', label: 'Faculty (Ms. Basanti Nandi)', email: 'faculty.nandi@gtbit.ac.in', pass: 'faculty123', icon: Users, color: '#0d9488', gradient: 'linear-gradient(135deg, #0d9488 0%, #2dd4bf 100%)', desc: 'Assistant Professor & Guide' },
-    { role: 'admin', label: 'Admin (HOD / Dean)', email: 'admin@gtbit.ac.in', pass: 'admin123', icon: Shield, color: '#4f46e5', gradient: 'linear-gradient(135deg, #4f46e5 0%, #818cf8 100%)', desc: 'Complete Campus Administration' },
-    { role: 'parent', label: 'Parent (Mr. Kuldeep Singh)', email: 'parent.tejassveer@gmail.com', pass: 'parent123', icon: HeartHandshake, color: '#d97706', gradient: 'linear-gradient(135deg, #d97706 0%, #fbbf24 100%)', desc: 'Parent Portal of Tejassveer' }
-  ];
 
   const features = [
     'CGPA Probability Prediction',
@@ -218,117 +208,36 @@ export default function LoginView() {
         </div>
 
         {/* Right Column: Auth Panel */}
-        <div style={{ padding: '2.5rem', display: 'flex', flexDirection: 'column' }}>
-          {/* Demo Access Header */}
+        <div style={{ padding: '2.5rem', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
           <div className="animate-slide-right" style={{
             display: 'flex',
             alignItems: 'center',
-            gap: '0.5rem',
-            fontSize: '0.92rem',
+            gap: '0.6rem',
+            fontSize: '1.05rem',
             fontWeight: 800,
-            marginBottom: '0.5rem',
+            marginBottom: '0.45rem',
             color: 'var(--text-primary)'
           }}>
             <div style={{
-              width: '28px',
-              height: '28px',
-              borderRadius: '8px',
+              width: '32px',
+              height: '32px',
+              borderRadius: '9px',
               background: 'linear-gradient(135deg, #4f46e5, #06b6d4)',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center'
             }}>
-              <Zap size={14} color="#fff" />
+              <Lock size={15} color="#fff" />
             </div>
-            Quick Access Personas
+            Campus Portal Sign In
           </div>
 
-          <p className="animate-slide-right stagger-1" style={{ fontSize: '0.76rem', color: 'var(--text-muted)', marginBottom: '1rem', lineHeight: 1.5 }}>
-            Select a demo account to explore the portal instantly:
+          <p className="animate-slide-right stagger-1" style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '1.35rem', lineHeight: 1.5 }}>
+            Enter your GTBIT institutional email, roll number, or employee ID along with your password.
           </p>
 
-          {/* Demo Account Cards */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', marginBottom: '1.5rem' }}>
-            {demoAccounts.map((demo, idx) => {
-              const Icon = demo.icon;
-              const isHovered = hoveredDemo === idx;
-              return (
-                <button
-                  key={idx}
-                  type="button"
-                  className={`animate-slide-right stagger-${Math.min(idx + 2, 8)}`}
-                  onClick={() => quickSwitchRole(demo.role, demo.email)}
-                  onMouseEnter={() => setHoveredDemo(idx)}
-                  onMouseLeave={() => setHoveredDemo(null)}
-                  style={{
-                    padding: '0.65rem 0.85rem',
-                    borderRadius: 'var(--radius-md)',
-                    border: `1.5px solid ${isHovered ? demo.color + '60' : 'var(--border-subtle)'}`,
-                    background: isHovered ? `${demo.color}08` : 'var(--bg-surface)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    cursor: 'pointer',
-                    fontFamily: 'inherit',
-                    textAlign: 'left',
-                    transition: 'all 0.25s cubic-bezier(0.16, 1, 0.3, 1)',
-                    transform: isHovered ? 'translateX(6px)' : 'translateX(0)',
-                    boxShadow: isHovered ? `0 4px 16px ${demo.color}18` : 'none'
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                    <div style={{
-                      width: '34px',
-                      height: '34px',
-                      borderRadius: '10px',
-                      background: demo.gradient,
-                      color: '#ffffff',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      flexShrink: 0,
-                      boxShadow: `0 3px 10px ${demo.color}30`,
-                      transition: 'transform 0.2s ease',
-                      transform: isHovered ? 'scale(1.08)' : 'scale(1)'
-                    }}>
-                      <Icon size={16} />
-                    </div>
-                    <div>
-                      <div style={{ fontSize: '0.84rem', fontWeight: 700, color: 'var(--text-primary)' }}>
-                        {demo.label}
-                      </div>
-                      <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: '0.1rem' }}>
-                        {demo.desc}
-                      </div>
-                    </div>
-                  </div>
-
-                  <ChevronRight 
-                    size={16} 
-                    color={isHovered ? demo.color : 'var(--text-muted)'}
-                    style={{ transition: 'all 0.2s ease', transform: isHovered ? 'translateX(3px)' : 'translateX(0)' }}
-                  />
-                </button>
-              );
-            })}
-          </div>
-
           {/* Manual Login Form */}
-          <form onSubmit={handleManualLogin} className="animate-slide-right stagger-8" style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: '1.25rem' }}>
-            <div style={{ 
-              fontSize: '0.7rem', 
-              fontWeight: 800, 
-              color: 'var(--text-muted)', 
-              textTransform: 'uppercase', 
-              letterSpacing: '0.06em',
-              marginBottom: '0.85rem',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.35rem'
-            }}>
-              <Lock size={11} />
-              Sign In With Credentials
-            </div>
+          <form onSubmit={handleManualLogin} className="animate-slide-right stagger-2">
 
             {error && (
               <div style={{
@@ -359,12 +268,12 @@ export default function LoginView() {
                   color: 'var(--text-muted)'
                 }} />
                 <input
-                  type="email"
+                  type="text"
                   required
                   className="form-input"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  placeholder="Institutional Email"
+                  placeholder="Email, Roll No (e.g. 071/CSE2/2023), or Employee ID"
                   style={{ fontSize: '0.84rem', paddingLeft: '2.5rem' }}
                 />
               </div>

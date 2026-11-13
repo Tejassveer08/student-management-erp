@@ -26,7 +26,7 @@ export default function StudentsView() {
   const { user, token } = useAuth();
   const [students, setStudents] = useState([]);
   const [search, setSearch] = useState('');
-  const [selectedSemester, setSelectedSemester] = useState('4');
+  const [selectedSemester, setSelectedSemester] = useState('');
   const [selectedSection, setSelectedSection] = useState('');
   const [loading, setLoading] = useState(true);
 
@@ -329,10 +329,13 @@ Aarav Sehgal, aarav.s@gtbit.ac.in, 610/CSE2/2023, 08713202723, 4, CSE-2, 9811234
             className="form-select"
             style={{ width: '150px' }}
           >
-            <option value="4">Semester 4</option>
-            <option value="3">Semester 3</option>
-            <option value="2">Semester 2</option>
+            <option value="">All Semesters</option>
             <option value="1">Semester 1</option>
+            <option value="2">Semester 2</option>
+            <option value="3">Semester 3</option>
+            <option value="4">Semester 4</option>
+            <option value="5">Semester 5</option>
+            <option value="6">Semester 6</option>
           </select>
 
           <select
@@ -342,8 +345,21 @@ Aarav Sehgal, aarav.s@gtbit.ac.in, 610/CSE2/2023, 08713202723, 4, CSE-2, 9811234
             style={{ width: '150px' }}
           >
             <option value="">All Sections</option>
-            <option value="CSE-2">Section CSE-2</option>
             <option value="CSE-1">Section CSE-1</option>
+            <option value="CSE-2">Section CSE-2</option>
+            <option value="CSE-3">Section CSE-3</option>
+            <option value="CSE-E1">Section CSE-E1</option>
+            <option value="CSE-E2">Section CSE-E2</option>
+            <option value="IT-1">Section IT-1</option>
+            <option value="IT-2">Section IT-2</option>
+            <option value="IT-3">Section IT-3</option>
+            <option value="ECE-1">Section ECE-1</option>
+            <option value="ECE-2">Section ECE-2</option>
+            <option value="ECE-3">Section ECE-3</option>
+            <option value="AIML-1">Section AIML-1</option>
+            <option value="AIML-2">Section AIML-2</option>
+            <option value="AIDS-1">Section AIDS-1</option>
+            <option value="AIDS-2">Section AIDS-2</option>
           </select>
         </div>
 

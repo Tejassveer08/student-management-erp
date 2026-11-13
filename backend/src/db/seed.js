@@ -45,6 +45,7 @@ const {
 } = require('./database');
 const { GTBIT_SOCIETIES } = require('./societiesData');
 const { applySocietyCredit, findOwningFacultyId } = require('../services/attendanceCredit');
+const { marksToGradePoint } = require('../services/cgpaCalculator');
 
 const FIRST_NAMES = [
   'Aarav', 'Vivaan', 'Aditya', 'Vihaan', 'Arjun', 'Sai', 'Reyansh', 'Ayaan', 'Krishna', 'Ishaan',
@@ -350,6 +351,67 @@ async function seedDatabase() {
   const subOSLab = nextId('subjects');
   const subAlgoLab = nextId('subjects');
 
+  const extraSemSubjects = [
+    // Semester 1
+    { sem: 1, code: 'ETMA-101', name: 'Applied Mathematics - I', credits: 4, fac: facSharma, pass: 82.0, avg: 66.5, diff: 0.58 },
+    { sem: 1, code: 'ETPH-103', name: 'Applied Physics - I', credits: 4, fac: facSingh, pass: 85.0, avg: 69.0, diff: 0.52 },
+    { sem: 1, code: 'ETCS-105', name: 'Programming in C', credits: 4, fac: facNandi, pass: 90.0, avg: 74.5, diff: 0.42 },
+    { sem: 1, code: 'ETEC-107', name: 'Electrical & Electronics Fundamentals', credits: 4, fac: facSharma, pass: 81.0, avg: 65.0, diff: 0.60 },
+    { sem: 1, code: 'ETHS-109', name: 'Communication Skills', credits: 3, fac: facNandi, pass: 96.0, avg: 80.5, diff: 0.25 },
+    // Semester 2
+    { sem: 2, code: 'ETMA-102', name: 'Applied Mathematics - II', credits: 4, fac: facSharma, pass: 80.0, avg: 64.8, diff: 0.62 },
+    { sem: 2, code: 'ETCH-104', name: 'Applied Chemistry', credits: 4, fac: facSingh, pass: 88.0, avg: 72.0, diff: 0.45 },
+    { sem: 2, code: 'ETCS-106', name: 'Data Structures & File Systems', credits: 4, fac: facNandi, pass: 79.0, avg: 65.2, diff: 0.68 },
+    { sem: 2, code: 'ETEC-108', name: 'Digital Logic Design', credits: 4, fac: facSharma, pass: 84.0, avg: 68.5, diff: 0.55 },
+    { sem: 2, code: 'ETME-110', name: 'Engineering Mechanics', credits: 3, fac: facSingh, pass: 86.0, avg: 70.0, diff: 0.48 },
+    // Semester 3
+    { sem: 3, code: 'ETCS-201', name: 'Discrete Mathematics', credits: 4, fac: facNandi, pass: 78.0, avg: 63.5, diff: 0.68 },
+    { sem: 3, code: 'ETCS-203', name: 'Object-Oriented Programming (C++)', credits: 4, fac: facSharma, pass: 89.0, avg: 73.0, diff: 0.46 },
+    { sem: 3, code: 'ETCS-205', name: 'Computer Organization & Architecture', credits: 4, fac: facSingh, pass: 82.5, avg: 67.0, diff: 0.58 },
+    { sem: 3, code: 'ETCS-207', name: 'Database Management Systems', credits: 4, fac: facNandi, pass: 91.0, avg: 75.5, diff: 0.40 },
+    { sem: 3, code: 'ETCS-209', name: 'Theory of Computation', credits: 4, fac: facSingh, pass: 74.0, avg: 60.5, diff: 0.75 },
+    // Semester 5
+    { sem: 5, code: 'ETCS-301', name: 'Compiler Design', credits: 4, fac: facNandi, pass: 77.5, avg: 63.0, diff: 0.70 },
+    { sem: 5, code: 'ETCS-303', name: 'Web Engineering & Full Stack Dev', credits: 4, fac: facSharma, pass: 93.0, avg: 77.5, diff: 0.36 },
+    { sem: 5, code: 'ETCS-305', name: 'Information Security & Cryptography', credits: 4, fac: facSingh, pass: 85.0, avg: 69.5, diff: 0.52 },
+    { sem: 5, code: 'ETCS-307', name: 'Microprocessors & Interfacing', credits: 4, fac: facSharma, pass: 81.0, avg: 65.5, diff: 0.60 },
+    { sem: 5, code: 'ETCS-309', name: 'Cloud Computing & Virtualization', credits: 4, fac: facSingh, pass: 90.0, avg: 74.0, diff: 0.44 },
+    // Semester 6
+    { sem: 6, code: 'ETCS-302', name: 'Distributed Systems', credits: 4, fac: facSingh, pass: 83.0, avg: 67.5, diff: 0.58 },
+    { sem: 6, code: 'ETCS-304', name: 'Deep Learning & Neural Networks', credits: 4, fac: facNandi, pass: 80.0, avg: 65.0, diff: 0.65 },
+    { sem: 6, code: 'ETCS-306', name: 'Big Data & Data Warehousing', credits: 4, fac: facSharma, pass: 88.5, avg: 72.5, diff: 0.48 },
+    { sem: 6, code: 'ETCS-308', name: 'Mobile Application Development', credits: 4, fac: facNandi, pass: 94.0, avg: 78.5, diff: 0.34 },
+    { sem: 6, code: 'ETHS-310', name: 'Engineering Economics & Management', credits: 3, fac: facSharma, pass: 95.0, avg: 80.0, diff: 0.28 }
+  ];
+
+  const theorySubjectsBySem = {
+    1: [],
+    2: [],
+    3: [],
+    4: [subOS, subAlgo, subCN, subSE, subAI],
+    5: [],
+    6: []
+  };
+
+  const extraSubjectDocs = extraSemSubjects.map(s => {
+    const id = nextId('subjects');
+    theorySubjectsBySem[s.sem].push(id);
+    return {
+      id,
+      course_id: courseBTechCSEId,
+      code: s.code,
+      name: s.name,
+      semester: s.sem,
+      credits: s.credits,
+      type: 'Theory',
+      faculty_id: s.fac,
+      historical_pass_pct: s.pass,
+      historical_avg_marks: s.avg,
+      difficulty_index: s.diff,
+      syllabus_outline: `Core GGSIPU Semester ${s.sem} curriculum for ${s.name}`
+    };
+  });
+
   await Subject.insertMany([
     { id: subOS, course_id: courseBTechCSEId, code: 'ETCS-202', name: 'Operating Systems', semester: 4, credits: 4, type: 'Theory', faculty_id: facSharma, historical_pass_pct: 84.5, historical_avg_marks: 68.2, difficulty_index: 0.58, syllabus_outline: 'Unit 1: Process Management & Threads, Unit 2: CPU Scheduling & Synchronization, Unit 3: Deadlocks & Memory Management, Unit 4: File Systems & I/O' },
     { id: subAlgo, course_id: courseBTechCSEId, code: 'ETCS-204', name: 'Design and Analysis of Algorithms', semester: 4, credits: 4, type: 'Theory', faculty_id: facNandi, historical_pass_pct: 76.0, historical_avg_marks: 62.8, difficulty_index: 0.72, syllabus_outline: 'Unit 1: Asymptotic Analysis & Divide-and-Conquer, Unit 2: Greedy & Dynamic Programming, Unit 3: Graph Algorithms (Dijkstra, Bellman-Ford), Unit 4: NP-Completeness' },
@@ -357,7 +419,8 @@ async function seedDatabase() {
     { id: subSE, course_id: courseBTechCSEId, code: 'ETCS-208', name: 'Software Engineering', semester: 4, credits: 4, type: 'Theory', faculty_id: facNandi, historical_pass_pct: 94.0, historical_avg_marks: 78.0, difficulty_index: 0.35, syllabus_outline: 'Unit 1: SDLC Models & Agile, Unit 2: Requirements Analysis & SRS, Unit 3: Software Design, Architecture & UML, Unit 4: Testing & Maintenance' },
     { id: subAI, course_id: courseBTechCSEId, code: 'ETCS-210', name: 'Artificial Intelligence & Machine Learning', semester: 4, credits: 4, type: 'Theory', faculty_id: facSingh, historical_pass_pct: 80.5, historical_avg_marks: 65.5, difficulty_index: 0.66, syllabus_outline: 'Unit 1: Search Strategies (A*, Minimax), Unit 2: Knowledge Representation, Unit 3: Supervised & Unsupervised Learning, Unit 4: Neural Networks & Deep Learning' },
     { id: subOSLab, course_id: courseBTechCSEId, code: 'ETCS-252', name: 'Operating Systems Lab', semester: 4, credits: 1, type: 'Practical', faculty_id: facSharma, historical_pass_pct: 98.0, historical_avg_marks: 88.0, difficulty_index: 0.20, syllabus_outline: 'Linux Shell Scripting, fork() process creation, POSIX threads, Dining Philosophers synchronization' },
-    { id: subAlgoLab, course_id: courseBTechCSEId, code: 'ETCS-254', name: 'Algorithms Lab', semester: 4, credits: 1, type: 'Practical', faculty_id: facNandi, historical_pass_pct: 96.0, historical_avg_marks: 85.0, difficulty_index: 0.25, syllabus_outline: 'MergeSort, QuickSort runtime benchmarking, Matrix Chain Multiplication, Kruskal & Prim algorithms' }
+    { id: subAlgoLab, course_id: courseBTechCSEId, code: 'ETCS-254', name: 'Algorithms Lab', semester: 4, credits: 1, type: 'Practical', faculty_id: facNandi, historical_pass_pct: 96.0, historical_avg_marks: 85.0, difficulty_index: 0.25, syllabus_outline: 'MergeSort, QuickSort runtime benchmarking, Matrix Chain Multiplication, Kruskal & Prim algorithms' },
+    ...extraSubjectDocs
   ]);
 
   // 6. Timetable Slots
@@ -464,13 +527,32 @@ async function seedDatabase() {
   await AttendanceSession.insertMany(sessionsToInsert);
   await AttendanceRecord.insertMany(recordsToInsert);
 
-  // 8. Examinations & Results
+  // 8. Examinations & Results (All 6 Semesters)
   const examMidTerm = nextId('examinations');
   const examMajor = nextId('examinations');
+  const examSem1 = nextId('examinations');
+  const examSem2 = nextId('examinations');
+  const examSem3 = nextId('examinations');
+  const examSem5 = nextId('examinations');
+  const examSem6 = nextId('examinations');
+
+  const examBySem = {
+    1: examSem1,
+    2: examSem2,
+    3: examSem3,
+    4: examMidTerm,
+    5: examSem5,
+    6: examSem6
+  };
 
   await Examination.insertMany([
-    { id: examMidTerm, name: 'Mid-Term Minor-1 Examination', semester: 4, academic_year: '2025-2026', exam_type: 'Minor', start_date: '2026-02-10', end_date: '2026-02-18', status: 'Results_Declared' },
-    { id: examMajor, name: 'End-Term Major Semester Examination', semester: 4, academic_year: '2025-2026', exam_type: 'Major', start_date: '2026-05-15', end_date: '2026-05-30', status: 'Scheduled' }
+    { id: examSem1, name: 'End-Term Examination (Semester 1)', semester: 1, academic_year: '2023-2024', exam_type: 'Major', start_date: '2023-12-10', end_date: '2023-12-24', status: 'Results_Declared' },
+    { id: examSem2, name: 'End-Term Examination (Semester 2)', semester: 2, academic_year: '2023-2024', exam_type: 'Major', start_date: '2024-05-12', end_date: '2024-05-26', status: 'Results_Declared' },
+    { id: examSem3, name: 'End-Term Examination (Semester 3)', semester: 3, academic_year: '2024-2025', exam_type: 'Major', start_date: '2024-12-09', end_date: '2024-12-23', status: 'Results_Declared' },
+    { id: examMidTerm, name: 'Mid-Term Minor-1 Examination (Semester 4)', semester: 4, academic_year: '2025-2026', exam_type: 'Minor', start_date: '2026-02-10', end_date: '2026-02-18', status: 'Results_Declared' },
+    { id: examMajor, name: 'End-Term Major Semester Examination', semester: 4, academic_year: '2025-2026', exam_type: 'Major', start_date: '2026-05-15', end_date: '2026-05-30', status: 'Scheduled' },
+    { id: examSem5, name: 'End-Term Examination (Semester 5)', semester: 5, academic_year: '2025-2026', exam_type: 'Major', start_date: '2025-12-08', end_date: '2025-12-22', status: 'Results_Declared' },
+    { id: examSem6, name: 'End-Term Examination (Semester 6)', semester: 6, academic_year: '2025-2026', exam_type: 'Major', start_date: '2026-05-10', end_date: '2026-05-25', status: 'Results_Declared' }
   ]);
 
   const studentMarksConfig = [
@@ -512,6 +594,8 @@ async function seedDatabase() {
   ];
 
   const marksToInsert = [];
+  const coreSem4Done = new Set([sTejassveerId, sDevId, sKrishmeetId, sHargunId, sAmanId]);
+
   for (const item of studentMarksConfig) {
     for (const m of item.marks) {
       marksToInsert.push({
@@ -529,7 +613,44 @@ async function seedDatabase() {
       });
     }
   }
-  await ExamMark.insertMany(marksToInsert);
+
+  // Generate individual semester marks for ALL 905 students across Semesters 1..6
+  for (const st of studentsToInsert) {
+    const baseFactor = Math.min(9.5, Math.max(5.5, st.current_cgpa || 8.0));
+    for (let sem = 1; sem <= 6; sem++) {
+      if (sem === 4 && coreSem4Done.has(st.id)) continue;
+      const semSubs = theorySubjectsBySem[sem] || [];
+      const exId = examBySem[sem];
+      semSubs.forEach((subId, idx) => {
+        const variance = ((st.id * 13 + sem * 7 + idx * 11) % 15) - 7; // -7..+7
+        const targetTot = Math.min(98, Math.max(45, Math.round(baseFactor * 9.5 + variance)));
+        const internal = Number(Math.min(25, Math.max(10, Math.round(targetTot * 0.25))).toFixed(1));
+        const assignment = Number(Math.min(15, Math.max(7, Math.round(targetTot * 0.15))).toFixed(1));
+        const external = Number(Math.max(20, targetTot - internal - assignment).toFixed(1));
+        const total = Number((internal + assignment + external).toFixed(1));
+        const gpInfo = marksToGradePoint(total);
+
+        marksToInsert.push({
+          id: nextId('exam_marks'),
+          exam_id: exId,
+          subject_id: subId,
+          student_id: st.id,
+          internal_assessment: internal,
+          assignment_score: assignment,
+          external_exam: external,
+          total_score: total,
+          letter_grade: gpInfo.grade,
+          grade_points: gpInfo.gp,
+          remarks: total >= 85 ? 'Excellent performance' : (total >= 75 ? 'Good consistency' : 'Needs improvement in problem solving')
+        });
+      });
+    }
+  }
+
+  console.log(`Inserting ${marksToInsert.length} semester exam mark records across Semesters 1-6...`);
+  for (let i = 0; i < marksToInsert.length; i += 5000) {
+    await ExamMark.insertMany(marksToInsert.slice(i, i + 5000));
+  }
 
   // 9. Assignments & Submissions
   const assignOS = nextId('assignments');

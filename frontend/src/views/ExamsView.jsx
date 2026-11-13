@@ -19,6 +19,7 @@ export default function ExamsView() {
   const [reportCard, setReportCard] = useState(null);
   const [students, setStudents] = useState([]);
   const [selectedStudentId, setSelectedStudentId] = useState('');
+  const [selectedSemester, setSelectedSemester] = useState(4);
   const [subjects, setSubjects] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -36,7 +37,7 @@ export default function ExamsView() {
 
   useEffect(() => {
     fetchExams();
-  }, [token, selectedStudentId]);
+  }, [token, selectedStudentId, selectedSemester]);
 
   async function fetchExams() {
     if (!token) return;
@@ -45,8 +46,8 @@ export default function ExamsView() {
     try {
       const [exRes, stRes, subRes] = await Promise.all([
         fetch('/api/exams', { headers: { 'Authorization': `Bearer ${token}` } }),
-        fetch('/api/students?semester=4', { headers: { 'Authorization': `Bearer ${token}` } }),
-        fetch('/api/academics/subjects?semester=4', { headers: { 'Authorization': `Bearer ${token}` } })
+        fetch('/api/students', { headers: { 'Authorization': `Bearer ${token}` } }),
+        fetch(`/api/academics/subjects?semester=${selectedSemester}`, { headers: { 'Authorization': `Bearer ${token}` } })
       ]);
 
       if (exRes.ok) setExams(await exRes.json());
@@ -67,7 +68,7 @@ export default function ExamsView() {
 
       // Fetch Report card
       const targetId = selectedStudentId || 1;
-      const repRes = await fetch(`/api/exams/report-card/${targetId}`, {
+      const repRes = await fetch(`/api/exams/report-card/${targetId}?semester=${selectedSemester}`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       if (repRes.ok) {
@@ -181,7 +182,7 @@ export default function ExamsView() {
 
       {/* Student Marksheet Selector (Admin/Faculty/Parent) */}
       <div className="glass-panel" style={{ padding: '1rem 1.5rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '1rem' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
           <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>Select Student Marksheet:</span>
           <select
             value={selectedStudentId}
@@ -192,6 +193,18 @@ export default function ExamsView() {
             {students.map(s => (
               <option key={s.id} value={s.id}>
                 {s.full_name} ({s.roll_no})
+              </option>
+            ))}
+          </select>
+          <select
+            value={selectedSemester}
+            onChange={(e) => setSelectedSemester(Number(e.target.value))}
+            className="form-select"
+            style={{ width: '150px', padding: '0.4rem 0.75rem' }}
+          >
+            {[1, 2, 3, 4, 5, 6].map(sem => (
+              <option key={sem} value={sem}>
+                Semester {sem}
               </option>
             ))}
           </select>
@@ -233,7 +246,7 @@ export default function ExamsView() {
               textTransform: 'uppercase',
               letterSpacing: '0.05em'
             }}>
-              Official Statement of Grades (Semester 4)
+              Official Statement of Grades (Semester {reportCard.selected_semester || selectedSemester})
             </div>
           </div>
 

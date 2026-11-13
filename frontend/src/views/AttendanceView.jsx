@@ -68,7 +68,7 @@ export default function AttendanceView() {
 
   useEffect(() => {
     fetchData();
-  }, [token, inspectedStudentId, user?.role]);
+  }, [token, inspectedStudentId, user?.role, selectedSection]);
 
   async function fetchData() {
     if (!token) return;
@@ -113,7 +113,7 @@ export default function AttendanceView() {
       }
 
       // 4. Fetch Students (for one-tap matrix)
-      const stRes = await fetch('/api/students?semester=4&section=CSE-2', {
+      const stRes = await fetch(`/api/students?section=${selectedSection}`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       if (stRes.ok) {
@@ -566,13 +566,23 @@ export default function AttendanceView() {
         <div className="glass-panel" style={{ padding: '1.5rem' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '0.75rem' }}>
             <div>
-              <h3 style={{ fontSize: '1.1rem' }}>Faculty One-Tap Attendance Roll Call (CSE-2)</h3>
+              <h3 style={{ fontSize: '1.1rem' }}>Faculty One-Tap Attendance Roll Call ({selectedSection})</h3>
               <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
                 Click to toggle Present, Absent, or Late for each student in the section.
               </p>
             </div>
 
-            <div style={{ display: 'flex', gap: '0.5rem' }}>
+            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+              <select
+                value={selectedSection}
+                onChange={(e) => setSelectedSection(e.target.value)}
+                className="form-select"
+                style={{ width: '140px', padding: '0.35rem 0.6rem', fontSize: '0.85rem' }}
+              >
+                {['CSE-1', 'CSE-2', 'CSE-3', 'CSE-E1', 'CSE-E2', 'IT-1', 'IT-2', 'IT-3', 'ECE-1', 'ECE-2', 'ECE-3', 'AIML-1', 'AIML-2', 'AIDS-1', 'AIDS-2'].map(sec => (
+                  <option key={sec} value={sec}>{sec}</option>
+                ))}
+              </select>
               <button 
                 onClick={() => {
                   const updated = {};

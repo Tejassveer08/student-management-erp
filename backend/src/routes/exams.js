@@ -295,6 +295,8 @@ router.get('/report-card/:studentId', verifyToken, requirePermission('exams', 'r
       return res.status(404).json({ error: 'Student not found' });
     }
 
+    const selectedSemester = req.query.semester ? Number(req.query.semester) : (s.semester || 4);
+
     const [u, c, d, marksDocs] = await Promise.all([
       User.findOne({ id: s.user_id }).lean(),
       Course.findOne({ id: s.course_id }).lean(),
@@ -313,7 +315,10 @@ router.get('/report-card/:studentId', verifyToken, requirePermission('exams', 'r
     const examSet = new Set(exams.map(ex => ex.id));
 
     const marksList = marksDocs
-      .filter(em => subMap[em.subject_id] && examSet.has(em.exam_id))
+      .filter(em => {
+        const sub = subMap[em.subject_id];
+        return sub && examSet.has(em.exam_id) && sub.semester === selectedSemester;
+      })
       .map(em => {
         const sub = subMap[em.subject_id];
         return {
@@ -321,7 +326,8 @@ router.get('/report-card/:studentId', verifyToken, requirePermission('exams', 'r
           subject_code: sub.code,
           subject_name: sub.name,
           credits: sub.credits,
-          subject_type: sub.type
+          subject_type: sub.type,
+          semester: sub.semester
         };
       })
       .sort((a, b) => String(a.subject_code).localeCompare(String(b.subject_code)));
@@ -337,6 +343,8 @@ router.get('/report-card/:studentId', verifyToken, requirePermission('exams', 'r
     const sgpa = totalCredits > 0 ? Number((weightedPoints / totalCredits).toFixed(2)) : s.current_cgpa;
 
     res.json({
+      selected_semester: selectedSemester,
+      available_semesters: [1, 2, 3, 4, 5, 6],
       institution: {
         name: 'Guru Tegh Bahadur Institute of Technology (GTBIT)',
         affiliate: 'Guru Gobind Singh Indraprastha University (GGSIPU), New Delhi',
