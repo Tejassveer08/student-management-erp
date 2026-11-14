@@ -17,7 +17,8 @@
  *   external%   = (w_i·coursework% + w_a·attendance% + w_d·ease%) / (w_i + w_a + w_d)
  *                 × attendance penalty when below the threshold
  *   predicted   = internal + assignment (actual, or projected from coursework) + 0.60·external% + what-if
- *   band        = ± (2.5 + 4·difficulty + 0.12·shortfall below threshold + 3.5–5 if no internals yet)
+ *   external%  ← a + b × external%   (a, b, k fitted on declared results — see services/calibration.js)
+ *   band        = ± k × (2.5 + 4·difficulty + 0.12·shortfall below threshold + 3.5–5 if no internals yet)
  *   prior       = without internals: 60% the student's own CGPA level, 40% the subject's historical average
  *   confidence  = 40 + 57 × (0.55·evidence + 0.15·attendance coverage + 0.30·SGPA-band tightness)
  *                 evidence = share of credits with recorded internals (+45% credit for the rest if the
@@ -69,12 +70,16 @@ function predictSubject(item, policy, adjustment = 0, ctx = {}) {
 
   let externalPct = (w.internal_weight * coursework + w.attendance_weight * att + w.difficulty_weight * ease) / wSum;
   if (att < threshold) externalPct *= Math.max(0.6, 1 - 0.012 * (threshold - att));
+  // Self-calibration fitted on the institution's declared results: external ≈ a + b × projection
+  const rawExternal = externalPct;
+  const cal = policy.calibration;
+  externalPct = clamp(cal.a + cal.b * externalPct, 0, 100);
 
   const courseworkMarks = (internal / maxInternal) * MAX_INTERNAL + (assignment / maxAssignment) * MAX_ASSIGNMENT;
   const raw = courseworkMarks + (externalPct / 100) * EXTERNAL_SHARE + Number(adjustment || 0);
   const predicted = round1(clamp(raw, 0, 100));
 
-  const margin = 2.5 + difficulty * 4 + Math.max(0, threshold - att) * 0.12 + (hasMarks ? 0 : ctx.cgpa > 0 ? 3.5 : 5);
+  const margin = cal.k * (2.5 + difficulty * 4 + Math.max(0, threshold - att) * 0.12 + (hasMarks ? 0 : ctx.cgpa > 0 ? 3.5 : 5));
   const lo = round1(clamp(predicted - margin, 0, 100));
   const hi = round1(clamp(predicted + margin, 0, 100));
 
@@ -100,6 +105,8 @@ function predictSubject(item, policy, adjustment = 0, ctx = {}) {
     attendance_pct: round1(att),
     coursework_score: round1(coursework),
     has_internal_marks: hasMarks,
+    external_projection: round1(rawExternal),
+    coursework_marks: round1(courseworkMarks),
     classes_held: Number(item.classes_held || 0),
     hypothetical_adjustment: Number(adjustment || 0),
     is_at_risk: Boolean(warning),
@@ -108,7 +115,9 @@ function predictSubject(item, policy, adjustment = 0, ctx = {}) {
 }
 
 function resolvePolicy(p = {}) {
+  const c = p.calibration || {};
   return {
+    calibration: { a: Number(c.a ?? 0), b: Number(c.b ?? 1), k: Number(c.k ?? 1) },
     threshold: Number(p.threshold ?? 75),
     weights: { ...DEFAULT_WEIGHTS, ...(p.weights || {}) },
     scale: p.scale && p.scale.length ? p.scale : normaliseScale(DEFAULT_GRADING_SCALE)
@@ -173,7 +182,7 @@ function calculateCGPAPredictionJS(payload) {
     total_semester_credits: credits,
     at_risk_count: atRisk.length,
     at_risk_subjects: atRisk,
-    model: { weights: policy.weights, attendance_threshold: policy.threshold },
+    model: { weights: policy.weights, attendance_threshold: policy.threshold, calibration: policy.calibration },
     subjects
   };
 }

@@ -19,6 +19,10 @@ function validateSetting(key, value) {
       if (vals.some((v) => !(v >= 0 && v <= 1))) return 'Each weight must be between 0 and 1';
       if (Math.abs(vals.reduce((a, b) => a + b, 0) - 1) > 0.011) return 'Model weights must add up to 1.0';
     }
+    if (key === 'cgpa_calibration') {
+      const c = parse();
+      if (!(Number(c.b) > 0 && Number(c.k) > 0 && Number.isFinite(Number(c.a)))) return 'Calibration needs numeric a, and positive b and k';
+    }
     if (key === 'grading_scale') {
       const list = normaliseScale(parse());
       if (list.length < 2 || list[list.length - 1].min !== 0) return 'The grading scale needs at least two bands and one starting at 0';

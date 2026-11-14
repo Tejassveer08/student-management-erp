@@ -59,7 +59,8 @@ async function load() {
       difficulty_weight: Number(weights.difficulty_weight) || 0,
       attendance_weight: Number(weights.attendance_weight) || 0
     },
-    gradingScale: normaliseScale(scaleObj)
+    gradingScale: normaliseScale(scaleObj),
+    cgpaCalibration: { a: 0, b: 1, k: 1, ...parseJson(map.cgpa_calibration, {}) }
   };
 }
 

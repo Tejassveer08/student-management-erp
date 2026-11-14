@@ -76,7 +76,9 @@ def resolve_policy(p):
     weights.update(p.get("weights") or {})
     scale = p.get("scale") or DEFAULT_SCALE
     scale = sorted(scale, key=lambda b: -float(b["min"]))
-    return {"threshold": float(p.get("threshold", 75)), "weights": weights, "scale": scale}
+    c = p.get("calibration") or {}
+    calibration = {"a": float(c.get("a", 0)), "b": float(c.get("b", 1)), "k": float(c.get("k", 1))}
+    return {"threshold": float(p.get("threshold", 75)), "weights": weights, "scale": scale, "calibration": calibration}
 
 
 def predict_subject(item, policy, adjustment=0.0, cgpa=0.0):
@@ -106,12 +108,16 @@ def predict_subject(item, policy, adjustment=0.0, cgpa=0.0):
     external_pct = (float(w["internal_weight"]) * coursework + float(w["attendance_weight"]) * att + float(w["difficulty_weight"]) * ease) / w_sum
     if att < threshold:
         external_pct *= max(0.6, 1 - 0.012 * (threshold - att))
+    # Self-calibration fitted on the institution's declared results
+    raw_external = external_pct
+    cal = policy["calibration"]
+    external_pct = clamp(cal["a"] + cal["b"] * external_pct, 0, 100)
 
     coursework_marks = internal / max_internal * MAX_INTERNAL + assignment / max_assignment * MAX_ASSIGNMENT
     raw = coursework_marks + external_pct / 100.0 * EXTERNAL_SHARE + float(adjustment or 0)
     predicted = r1(clamp(raw, 0, 100))
 
-    margin = 2.5 + diff * 4 + max(0, threshold - att) * 0.12 + (0 if has_marks else (3.5 if cgpa > 0 else 5))
+    margin = cal["k"] * (2.5 + diff * 4 + max(0, threshold - att) * 0.12 + (0 if has_marks else (3.5 if cgpa > 0 else 5)))
     lo = r1(clamp(predicted - margin, 0, 100))
     hi = r1(clamp(predicted + margin, 0, 100))
 
@@ -140,6 +146,8 @@ def predict_subject(item, policy, adjustment=0.0, cgpa=0.0):
         "attendance_pct": r1(att),
         "coursework_score": r1(coursework),
         "has_internal_marks": has_marks,
+        "external_projection": r1(raw_external),
+        "coursework_marks": r1(coursework_marks),
         "classes_held": float(item.get("classes_held") or 0),
         "hypothetical_adjustment": float(adjustment or 0),
         "is_at_risk": warning is not None,
@@ -208,7 +216,7 @@ def run_probability_analysis(payload):
         "total_semester_credits": credits,
         "at_risk_count": len(at_risk),
         "at_risk_subjects": at_risk,
-        "model": {"weights": policy["weights"], "attendance_threshold": policy["threshold"]},
+        "model": {"weights": policy["weights"], "attendance_threshold": policy["threshold"], "calibration": policy["calibration"]},
         "subjects": subjects,
     }
 

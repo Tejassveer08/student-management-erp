@@ -19,7 +19,7 @@ function invalidatePredictions() {
   cohortCache = null;
 }
 
-async function buildPayloads(students, whatIfByStudent = {}) {
+async function buildPayloads(students, whatIfByStudent = {}, policyOverride = {}) {
   if (!students.length) return [];
   const policy = await getPolicy();
   const subjectsFor = await subjectIndex({ theoryOnly: true });
@@ -52,7 +52,7 @@ async function buildPayloads(students, whatIfByStudent = {}) {
     else if (r.status === 'Late') a.attended += 0.5;
   }
 
-  const enginePolicy = { threshold: policy.attendanceThreshold, weights: policy.cgpaWeights, scale: policy.gradingScale };
+  const enginePolicy = { threshold: policy.attendanceThreshold, weights: policy.cgpaWeights, scale: policy.gradingScale, calibration: policy.cgpaCalibration, ...policyOverride };
 
   return students.map((st) => {
     const subs = subjectsFor(st.course_id, st.semester);

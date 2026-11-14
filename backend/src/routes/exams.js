@@ -17,6 +17,7 @@ const { recomputeCgpa } = require('../services/academicRecord');
 const { invalidatePredictions } = require('../services/predictions');
 const { notifyStudents } = require('../services/notify');
 const { invalidateMerit } = require('../services/merit');
+const { refreshCalibration } = require('../services/calibration');
 
 const router = express.Router();
 const LIMITS = { internal: 25, assignment: 15, external: 60 };
@@ -80,6 +81,7 @@ router.post('/:id/publish', verifyToken, requirePermission('exams', 'publish_res
 
     await Examination.updateOne({ id: examId }, { $set: { status: 'Results_Declared' } });
     const updated = exam.exam_type === 'Major' ? await recomputeCgpa(studentIds) : 0;
+    if (exam.exam_type === 'Major') refreshCalibration().catch((e) => console.warn('[calibration]', e.message));
     invalidatePredictions();
     invalidateMerit();
 

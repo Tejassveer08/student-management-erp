@@ -10,6 +10,7 @@ const { recomputeMerit } = require('./merit');
 const { refreshFees } = require('./feeLedger');
 const { rehomeAttendance } = require('./attendanceRehome');
 const { syncAttendanceAlerts, scheduleDailyAlerts } = require('./attendanceAlerts');
+const { refreshCalibration } = require('./calibration');
 
 async function once(name, fn) {
   const key = `migration:${name}`;
@@ -71,6 +72,9 @@ async function runMigrations() {
   const rehomed = await rehomeAttendance();
   if (rehomed.moved) console.log(`[migrate] re-homed ${rehomed.moved} attendance records into ${rehomed.sessionsCreated} section sessions (originals in attendance_records_backup)`);
   await refreshFees({}, { force: true });
+  // Re-fit the CGPA engine against the institution's declared results
+  const cal = await refreshCalibration();
+  console.log(`[migrate] CGPA engine calibrated on ${cal.n} declared results: a=${cal.a} b=${cal.b} k=${cal.k}`);
   // Attendance alerts must match the data: raise true ones, retire stale ones; then repeat daily
   const alerts = await syncAttendanceAlerts();
   if (alerts.resolved || alerts.raised) console.log(`[migrate] attendance alerts: ${alerts.raised} raised, ${alerts.resolved} stale alerts resolved`);
