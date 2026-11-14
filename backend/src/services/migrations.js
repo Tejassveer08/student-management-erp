@@ -9,6 +9,7 @@ const { regradeAllMarks, recomputeCgpa } = require('./academicRecord');
 const { recomputeMerit } = require('./merit');
 const { refreshFees } = require('./feeLedger');
 const { rehomeAttendance } = require('./attendanceRehome');
+const { syncAttendanceAlerts, scheduleDailyAlerts } = require('./attendanceAlerts');
 
 async function once(name, fn) {
   const key = `migration:${name}`;
@@ -70,6 +71,10 @@ async function runMigrations() {
   const rehomed = await rehomeAttendance();
   if (rehomed.moved) console.log(`[migrate] re-homed ${rehomed.moved} attendance records into ${rehomed.sessionsCreated} section sessions (originals in attendance_records_backup)`);
   await refreshFees({}, { force: true });
+  // Attendance alerts must match the data: raise true ones, retire stale ones; then repeat daily
+  const alerts = await syncAttendanceAlerts();
+  if (alerts.resolved || alerts.raised) console.log(`[migrate] attendance alerts: ${alerts.raised} raised, ${alerts.resolved} stale alerts resolved`);
+  scheduleDailyAlerts();
   await recomputeMerit();
 }
 

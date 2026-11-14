@@ -594,7 +594,8 @@ async function seedDatabase() {
 
   const recordsToInsert = [];
   for (const st of studentsToInsert) {
-    const targetAtt = 0.55 + Math.random() * 0.43; // 55% to 98% randomized per student
+    // 55% to 98% randomized per student; the at-risk demo student (Aman) is pinned under the 75% rule
+    const targetAtt = st.id === sAmanId ? 0.66 : 0.55 + Math.random() * 0.43;
     const semSessions = sessionsBySem[st.semester] || sessionsBySem[4];
     for (const sess of semSessions) {
       const roll = Math.random();
