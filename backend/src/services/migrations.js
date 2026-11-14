@@ -8,6 +8,7 @@ const { DEFAULT_GRADING_SCALE, invalidatePolicy } = require('./policy');
 const { regradeAllMarks, recomputeCgpa } = require('./academicRecord');
 const { recomputeMerit } = require('./merit');
 const { refreshFees } = require('./feeLedger');
+const { rehomeAttendance } = require('./attendanceRehome');
 
 async function once(name, fn) {
   const key = `migration:${name}`;
@@ -65,6 +66,9 @@ async function runMigrations() {
 
   // Cheap refreshes on every boot
   await syncCounters();
+  // Attendance recorded against another section's classes → move it to the student's own section
+  const rehomed = await rehomeAttendance();
+  if (rehomed.moved) console.log(`[migrate] re-homed ${rehomed.moved} attendance records into ${rehomed.sessionsCreated} section sessions (originals in attendance_records_backup)`);
   await refreshFees({}, { force: true });
   await recomputeMerit();
 }

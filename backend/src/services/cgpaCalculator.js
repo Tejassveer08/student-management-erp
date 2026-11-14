@@ -17,7 +17,11 @@
  *   external%   = (w_i·coursework% + w_a·attendance% + w_d·ease%) / (w_i + w_a + w_d)
  *                 × attendance penalty when below the threshold
  *   predicted   = internal + assignment (actual, or projected from coursework) + 0.60·external% + what-if
- *   band        = ± (3.5 + 6·difficulty + 0.15·shortfall below threshold + 4 if no internals yet)
+ *   band        = ± (2.5 + 4·difficulty + 0.12·shortfall below threshold + 3.5–5 if no internals yet)
+ *   prior       = without internals: 60% the student's own CGPA level, 40% the subject's historical average
+ *   confidence  = 40 + 57 × (0.55·evidence + 0.15·attendance coverage + 0.30·SGPA-band tightness)
+ *                 evidence = share of credits with recorded internals (+45% credit for the rest if the
+ *                 student has a CGPA history); attendance coverage saturates at 10 classes per subject
  */
 const { spawn } = require('child_process');
 const path = require('path');
@@ -39,7 +43,7 @@ const round1 = (v) => Math.round(v * 10) / 10;
 const round2 = (v) => Math.round(v * 100) / 100;
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
-function predictSubject(item, policy, adjustment = 0) {
+function predictSubject(item, policy, adjustment = 0, ctx = {}) {
   const scale = policy.scale;
   const threshold = policy.threshold;
   const w = policy.weights;
@@ -48,8 +52,10 @@ function predictSubject(item, policy, adjustment = 0) {
   const hasMarks = item.internal_score !== null && item.internal_score !== undefined;
   const maxInternal = Number(item.max_internal || MAX_INTERNAL);
   const maxAssignment = Number(item.max_assignment || MAX_ASSIGNMENT);
-  // Without recorded internals, assume the subject's historical average performance
-  const prior = clamp(Number(item.historical_avg_marks ?? 70), 0, 100) / 100;
+  // Without recorded internals, lean on the student's own record (CGPA) blended with the subject's history
+  const hist = clamp(Number(item.historical_avg_marks ?? 70), 0, 100) / 100;
+  const own = ctx.cgpa > 0 ? clamp(ctx.cgpa * 10 - 5, 0, 100) / 100 : null;
+  const prior = own !== null ? 0.6 * own + 0.4 * hist : hist;
   const internal = hasMarks ? Number(item.internal_score) : prior * maxInternal;
   const assignment = item.assignment_score !== null && item.assignment_score !== undefined ? Number(item.assignment_score) : prior * maxAssignment;
 
@@ -68,7 +74,7 @@ function predictSubject(item, policy, adjustment = 0) {
   const raw = courseworkMarks + (externalPct / 100) * EXTERNAL_SHARE + Number(adjustment || 0);
   const predicted = round1(clamp(raw, 0, 100));
 
-  const margin = 3.5 + difficulty * 6 + Math.max(0, threshold - att) * 0.15 + (hasMarks ? 0 : 4);
+  const margin = 2.5 + difficulty * 4 + Math.max(0, threshold - att) * 0.12 + (hasMarks ? 0 : ctx.cgpa > 0 ? 3.5 : 5);
   const lo = round1(clamp(predicted - margin, 0, 100));
   const hi = round1(clamp(predicted + margin, 0, 100));
 
@@ -94,6 +100,7 @@ function predictSubject(item, policy, adjustment = 0) {
     attendance_pct: round1(att),
     coursework_score: round1(coursework),
     has_internal_marks: hasMarks,
+    classes_held: Number(item.classes_held || 0),
     hypothetical_adjustment: Number(adjustment || 0),
     is_at_risk: Boolean(warning),
     warning_reason: warning
@@ -115,7 +122,8 @@ function calculateCGPAPredictionJS(payload) {
   const previousCredits = Number(payload.previous_credits || 0);
   const whatIf = payload.what_if_adjustments || {};
 
-  const subjects = (payload.subjects || []).map((it) => predictSubject(it, policy, whatIf[String(it.id)] || 0));
+  const hasHistory = previousCredits > 0 && currentCgpa > 0;
+  const subjects = (payload.subjects || []).map((it) => predictSubject(it, policy, whatIf[String(it.id)] || 0, { cgpa: hasHistory ? currentCgpa : 0 }));
   let credits = 0;
   let exp = 0;
   let lo = 0;
@@ -132,8 +140,14 @@ function calculateCGPAPredictionJS(payload) {
   const total = previousCredits + credits;
   const blend = (v) => (total ? round2((currentCgpa * previousCredits + v * credits) / total) : v);
 
-  const avgBand = subjects.reduce((a, s) => a + (s.score_range[1] - s.score_range[0]), 0) / Math.max(1, subjects.length);
-  const confidence = Math.max(55, Math.min(96, Math.round(100 - avgBand * 2.6)));
+  // Confidence = how much real evidence backs the forecast, and how tight it is
+  const cr = credits || 1;
+  const markedCredits = subjects.reduce((a, s) => a + (s.has_internal_marks ? s.credits : 0), 0);
+  const internalCoverage = markedCredits / cr;
+  const attendanceCoverage = subjects.reduce((a, s) => a + s.credits * Math.min(1, s.classes_held / 10), 0) / cr;
+  const evidence = internalCoverage + (1 - internalCoverage) * (hasHistory ? 0.45 : 0);
+  const tightness = clamp(1 - (sgpaHi - sgpaLo) / 3, 0, 1);
+  const confidence = Math.round(clamp(40 + 57 * (0.55 * evidence + 0.15 * attendanceCoverage + 0.3 * tightness), 40, 97));
   const atRisk = subjects.filter((s) => s.is_at_risk).map((s) => ({
     subject_code: s.subject_code,
     subject_name: s.subject_name,
@@ -149,7 +163,13 @@ function calculateCGPAPredictionJS(payload) {
     predicted_cgpa: blend(sgpa),
     cgpa_range: [blend(sgpaLo), blend(sgpaHi)],
     confidence_score: confidence,
-    confidence_level: confidence >= 82 ? 'High' : confidence >= 70 ? 'Moderate' : 'Low',
+    confidence_level: confidence >= 80 ? 'High' : confidence >= 65 ? 'Moderate' : 'Low',
+    confidence_basis: {
+      internal_coverage: round2(internalCoverage),
+      attendance_coverage: round2(attendanceCoverage),
+      sgpa_band: round2(sgpaHi - sgpaLo),
+      uses_cgpa_history: hasHistory
+    },
     total_semester_credits: credits,
     at_risk_count: atRisk.length,
     at_risk_subjects: atRisk,

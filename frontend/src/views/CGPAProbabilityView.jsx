@@ -122,7 +122,7 @@ function Analysis({ studentId }) {
   const deltaC = sim ? +(sim.predicted_cgpa - base.predicted_cgpa).toFixed(2) : 0;
   const [slo, shi] = view.sgpa_range || [];
   const [clo, chi] = view.cgpa_range || [];
-  const confTone = view.confidence_score >= 80 ? 'var(--success)' : view.confidence_score >= 65 ? 'var(--warning)' : 'var(--danger)';
+  const confTone = view.confidence_level === 'High' ? 'var(--success)' : view.confidence_level === 'Moderate' ? 'var(--warning)' : 'var(--danger)';
   const subjects = view.subjects || [];
   const baseBy = Object.fromEntries((base.subjects || []).map((s) => [s.subject_id, s]));
 
@@ -161,7 +161,16 @@ function Analysis({ studentId }) {
               <div>
                 <div className="eyebrow">Confidence</div>
                 <div style={{ color: '#fff', marginTop: 4 }}>{view.confidence_level} reliability</div>
-                <div className="xs" style={{ color: 'var(--panel-muted)', maxWidth: 140 }}>Narrows as more internal marks are recorded</div>
+                <div className="xs" style={{ color: 'var(--panel-muted)', maxWidth: 190, lineHeight: 1.5 }}>
+                  {view.confidence_basis ? (
+                    <>
+                      Internals recorded for {Math.round(view.confidence_basis.internal_coverage * 100)}% of credits
+                      {view.confidence_basis.internal_coverage < 1 && view.confidence_basis.uses_cgpa_history ? ' (the rest use your CGPA record)' : ''}
+                      {' · '}attendance evidence {Math.round(view.confidence_basis.attendance_coverage * 100)}%
+                      {' · '}SGPA band ±{(view.confidence_basis.sgpa_band / 2).toFixed(2)}
+                    </>
+                  ) : 'Rises as more internal marks are recorded'}
+                </div>
               </div>
             </div>
           </div>

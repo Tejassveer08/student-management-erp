@@ -14,6 +14,7 @@ Modes
 """
 
 import json
+import math
 import sys
 
 MAX_INTERNAL = 25.0
@@ -33,12 +34,17 @@ DEFAULT_SCALE = [
 ]
 
 
+def js_round(v):
+    """Half-up rounding identical to JavaScript's Math.round"""
+    return math.floor(v + 0.5)
+
+
 def r1(v):
-    return round(v * 10) / 10
+    return js_round(v * 10) / 10
 
 
 def r2(v):
-    return round(v * 100) / 100
+    return js_round(v * 100) / 100
 
 
 def clamp(v, lo, hi):
@@ -73,14 +79,16 @@ def resolve_policy(p):
     return {"threshold": float(p.get("threshold", 75)), "weights": weights, "scale": scale}
 
 
-def predict_subject(item, policy, adjustment=0.0):
+def predict_subject(item, policy, adjustment=0.0, cgpa=0.0):
     scale, threshold, w = policy["scale"], policy["threshold"], policy["weights"]
     w_sum = (float(w["internal_weight"]) + float(w["attendance_weight"]) + float(w["difficulty_weight"])) or 1.0
 
     has_marks = item.get("internal_score") is not None
     max_internal = float(item.get("max_internal") or MAX_INTERNAL)
     max_assignment = float(item.get("max_assignment") or MAX_ASSIGNMENT)
-    prior = clamp(float(item.get("historical_avg_marks", 70) if item.get("historical_avg_marks") is not None else 70), 0, 100) / 100.0
+    hist = clamp(float(item.get("historical_avg_marks") if item.get("historical_avg_marks") is not None else 70), 0, 100) / 100.0
+    own = clamp(cgpa * 10 - 5, 0, 100) / 100.0 if cgpa > 0 else None
+    prior = 0.6 * own + 0.4 * hist if own is not None else hist
     internal = float(item["internal_score"]) if has_marks else prior * max_internal
     assignment = float(item["assignment_score"]) if item.get("assignment_score") is not None else prior * max_assignment
 
@@ -103,7 +111,7 @@ def predict_subject(item, policy, adjustment=0.0):
     raw = coursework_marks + external_pct / 100.0 * EXTERNAL_SHARE + float(adjustment or 0)
     predicted = r1(clamp(raw, 0, 100))
 
-    margin = 3.5 + diff * 6 + max(0, threshold - att) * 0.15 + (0 if has_marks else 4)
+    margin = 2.5 + diff * 4 + max(0, threshold - att) * 0.12 + (0 if has_marks else (3.5 if cgpa > 0 else 5))
     lo = r1(clamp(predicted - margin, 0, 100))
     hi = r1(clamp(predicted + margin, 0, 100))
 
@@ -132,6 +140,7 @@ def predict_subject(item, policy, adjustment=0.0):
         "attendance_pct": r1(att),
         "coursework_score": r1(coursework),
         "has_internal_marks": has_marks,
+        "classes_held": float(item.get("classes_held") or 0),
         "hypothetical_adjustment": float(adjustment or 0),
         "is_at_risk": warning is not None,
         "warning_reason": warning,
@@ -144,7 +153,11 @@ def run_probability_analysis(payload):
     previous_credits = float(payload.get("previous_credits") or 0)
     what_if = payload.get("what_if_adjustments") or {}
 
-    subjects = [predict_subject(it, policy, what_if.get(str(it.get("id")), 0)) for it in payload.get("subjects", [])]
+    has_history = previous_credits > 0 and current_cgpa > 0
+    subjects = [
+        predict_subject(it, policy, what_if.get(str(it.get("id")), 0), current_cgpa if has_history else 0.0)
+        for it in payload.get("subjects", [])
+    ]
     credits = exp = lo = hi = 0.0
     for s in subjects:
         credits += s["credits"]
@@ -160,8 +173,13 @@ def run_probability_analysis(payload):
     def blend(v):
         return r2((current_cgpa * previous_credits + v * credits) / total) if total else v
 
-    avg_band = sum(s["score_range"][1] - s["score_range"][0] for s in subjects) / max(1, len(subjects))
-    confidence = int(max(55, min(96, round(100 - avg_band * 2.6))))
+    # Confidence = how much real evidence backs the forecast, and how tight it is
+    cr = credits or 1.0
+    internal_cov = sum(s["credits"] for s in subjects if s["has_internal_marks"]) / cr
+    attendance_cov = sum(s["credits"] * min(1.0, s["classes_held"] / 10.0) for s in subjects) / cr
+    evidence = internal_cov + (1 - internal_cov) * (0.45 if has_history else 0.0)
+    tightness = clamp(1 - (sgpa_hi - sgpa_lo) / 3.0, 0.0, 1.0)
+    confidence = int(js_round(clamp(40 + 57 * (0.55 * evidence + 0.15 * attendance_cov + 0.3 * tightness), 40, 97)))
     at_risk = [
         {
             "subject_code": s["subject_code"],
@@ -180,7 +198,13 @@ def run_probability_analysis(payload):
         "predicted_cgpa": blend(sgpa),
         "cgpa_range": [blend(sgpa_lo), blend(sgpa_hi)],
         "confidence_score": confidence,
-        "confidence_level": "High" if confidence >= 82 else ("Moderate" if confidence >= 70 else "Low"),
+        "confidence_level": "High" if confidence >= 80 else ("Moderate" if confidence >= 65 else "Low"),
+        "confidence_basis": {
+            "internal_coverage": r2(internal_cov),
+            "attendance_coverage": r2(attendance_cov),
+            "sgpa_band": r2(sgpa_hi - sgpa_lo),
+            "uses_cgpa_history": has_history,
+        },
         "total_semester_credits": credits,
         "at_risk_count": len(at_risk),
         "at_risk_subjects": at_risk,

@@ -98,16 +98,20 @@ function StudentReport({ summary, trends }) {
       )}
       <div className="grid-4">
         <div className={cx('card stat span-2 rise d1', risk && 'tint-danger')} style={{ flexDirection: 'row', alignItems: 'center', gap: 22 }}>
-          <Ring value={o} size={128} stroke={11} color={risk ? 'var(--danger)' : o < 80 ? 'var(--warning)' : 'var(--success)'}>
+          <Ring value={summary.total_conducted ? o : 0} size={128} stroke={11} color={risk ? 'var(--danger)' : o < 80 ? 'var(--warning)' : 'var(--success)'}>
             <div>
-              <div className="serif num" style={{ fontSize: 34, lineHeight: 1 }}>{o.toFixed(1)}<span style={{ fontSize: 16 }}>%</span></div>
+              <div className="serif num" style={{ fontSize: 34, lineHeight: 1 }}>{summary.total_conducted ? <>{o.toFixed(1)}<span style={{ fontSize: 16 }}>%</span></> : '—'}</div>
               <div className="xs muted">overall</div>
             </div>
           </Ring>
           <div className="grow">
-            <Badge tone={risk ? 'danger' : 'success'} dot>{risk ? 'Below 75% — detention risk' : 'Exam eligible'}</Badge>
+            {summary.total_conducted
+              ? <Badge tone={risk ? 'danger' : 'success'} dot>{risk ? `Below ${summary.threshold ?? 75}% — detention risk` : 'Exam eligible'}</Badge>
+              : <Badge dot>No classes recorded yet</Badge>}
             <div className="serif" style={{ fontSize: 24, marginTop: 10, lineHeight: 1.15 }}>
-              {num(summary.total_attended, 1)} <span className="muted">of</span> {summary.total_conducted} sessions attended
+              {summary.total_conducted
+                ? <>{num(summary.total_attended, 1)} <span className="muted">of</span> {summary.total_conducted} sessions attended</>
+                : 'Attendance appears here after the first roll call'}
             </div>
             <div className="small muted" style={{ marginTop: 6 }}>
               Includes {summary.total_society_credited || 0} society-duty credit{summary.total_society_credited === 1 ? '' : 's'} · late arrivals count as half

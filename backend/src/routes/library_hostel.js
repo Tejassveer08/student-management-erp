@@ -82,7 +82,7 @@ router.post('/issue', verifyToken, requireRoles('admin', 'faculty'), async (req,
     if (active.some((i) => i.book_id === bookId)) throw new HttpError(400, 'This student already has a copy of this book');
     if (active.some((i) => i.status === 'Overdue')) throw new HttpError(400, 'Return overdue books before issuing new ones');
 
-    const book = await LibraryBook.findOneAndUpdate({ id: bookId, available_copies: { $gt: 0 } }, { $inc: { available_copies: -1 } }, { new: true }).lean();
+    const book = await LibraryBook.findOneAndUpdate({ id: bookId, available_copies: { $gt: 0 } }, { $inc: { available_copies: -1 } }, { returnDocument: 'after' }).lean();
     if (!book) throw new HttpError(400, 'No copies of this book are available');
 
     const issueDate = localDate();
