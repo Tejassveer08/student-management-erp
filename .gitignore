@@ -38,3 +38,6 @@ Thumbs.db
 .vscode/
 .idea/
 .antigravity/
+
+# User uploads (assignment submissions, notes)
+backend/uploads/

@@ -1,8 +1,9 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const { User, Student, Faculty, Course, Department } = require('../db/database');
-const { verifyToken, JWT_SECRET } = require('../middleware/authMiddleware');
+const crypto = require('crypto');
+const { User, Student, Faculty, Course, Department, WardLink } = require('../db/database');
+const { verifyToken, JWT_SECRET, logAudit } = require('../middleware/authMiddleware');
 
 const router = express.Router();
 
@@ -27,7 +28,8 @@ async function getFullUserContext(user) {
       facultyProfile = { ...fac, department_name: d?.name };
     }
   } else if (user.role === 'parent') {
-    const ward = await Student.findOne({ parent_user_id: user.id }).lean();
+    const link = await WardLink.findOne({ parent_user_id: user.id }).sort({ is_primary: -1, id: 1 }).lean();
+    const ward = link ? await Student.findOne({ id: link.student_id }).lean() : null;
     if (ward) {
       const [wu, c, d] = await Promise.all([
         User.findOne({ id: ward.user_id }, 'full_name avatar_url').lean(),
@@ -71,6 +73,10 @@ router.post('/login', async (req, res) => {
   }
 
   const rawId = String(email).trim();
+  const key = attemptKey(req, rawId);
+  if (isLocked(key)) {
+    return res.status(429).json({ error: 'Too many failed attempts. Try again in 15 minutes or ask the administrator to reset your password.' });
+  }
   let user = await User.findOne({ email: rawId.toLowerCase() }).lean();
 
   if (!user) {
@@ -96,10 +102,12 @@ router.post('/login', async (req, res) => {
     }
   }
 
-  if (!user || !bcrypt.compareSync(password, user.password_hash)) {
+  if (!user || !bcrypt.compareSync(String(password), user.password_hash)) {
+    recordFail(key);
     return res.status(401).json({ error: 'Invalid ID/email or password' });
   }
 
+  attempts.delete(key);
   const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
   const context = await getFullUserContext(user);
   res.json({ message: 'Login successful', token, ...context });
@@ -111,49 +119,61 @@ router.get('/me', verifyToken, async (req, res) => {
   res.json(context);
 });
 
-// POST /api/auth/quick-switch
-router.post('/quick-switch', async (req, res) => {
-  const { role, email } = req.body;
-  let user = null;
+// Simple in-memory brute-force guard: 8 failed attempts per IP+ID locks that pair for 15 minutes
+const attempts = new Map();
+const WINDOW_MS = 15 * 60 * 1000;
+const MAX_FAILS = 8;
+function attemptKey(req, id) { return `${req.ip}|${String(id).toLowerCase()}`; }
+function isLocked(key) {
+  const a = attempts.get(key);
+  if (!a) return false;
+  if (Date.now() - a.first > WINDOW_MS) { attempts.delete(key); return false; }
+  return a.count >= MAX_FAILS;
+}
+function recordFail(key) {
+  const a = attempts.get(key);
+  if (!a || Date.now() - a.first > WINDOW_MS) attempts.set(key, { first: Date.now(), count: 1 });
+  else a.count += 1;
+}
 
-  if (email) {
-    user = await User.findOne({ email }).lean();
-  } else if (role) {
-    if (role === 'admin') {
-      user = await User.findOne({ role: 'admin' }).lean();
-    } else if (role === 'faculty') {
-      user = (await User.findOne({ email: 'faculty.nandi@gtbit.ac.in' }).lean()) || (await User.findOne({ role: 'faculty' }).lean());
-    } else if (role === 'student') {
-      user = (await User.findOne({ email: 'tejassveer@gtbit.ac.in' }).lean()) || (await User.findOne({ role: 'student' }).lean());
-    } else if (role === 'parent') {
-      user = await User.findOne({ role: 'parent' }).lean();
-    }
+function validatePassword(pw) {
+  if (typeof pw !== 'string' || pw.length < 8) return 'Password must be at least 8 characters long';
+  if (!/[A-Za-z]/.test(pw) || !/d/.test(pw)) return 'Password must contain letters and numbers';
+  return null;
+}
+
+// POST /api/auth/change-password — signed-in user changes their own password
+router.post('/change-password', verifyToken, async (req, res) => {
+  const { currentPassword, newPassword } = req.body || {};
+  const user = await User.findOne({ id: req.user.id }).lean();
+  if (!user || !bcrypt.compareSync(String(currentPassword || ''), user.password_hash)) {
+    return res.status(400).json({ error: 'Your current password is incorrect' });
   }
-
-  if (!user) {
-    return res.status(404).json({ error: 'User not found for role switch' });
-  }
-
-  const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
-  const context = await getFullUserContext(user);
-  res.json({ message: `Switched to ${user.role} persona: ${user.full_name}`, token, ...context });
+  const problem = validatePassword(newPassword);
+  if (problem) return res.status(400).json({ error: problem });
+  if (currentPassword === newPassword) return res.status(400).json({ error: 'Choose a password different from the current one' });
+  await User.updateOne({ id: user.id }, { $set: { password_hash: bcrypt.hashSync(newPassword, 10) } });
+  await logAudit({ userId: user.id, userRole: user.role, userEmail: user.email, action: 'PASSWORD_CHANGE', entityType: 'users', entityId: user.id, reason: 'User changed own password', ipAddress: req.ip });
+  res.json({ message: 'Password updated' });
 });
 
-// POST /api/auth/reset-password
-router.post('/reset-password', async (req, res) => {
-  const { email, newPassword } = req.body;
-  if (!email || !newPassword) {
-    return res.status(400).json({ error: 'Email and new password are required' });
+// POST /api/auth/admin-reset — admin issues a temporary password for any account (audited)
+router.post('/admin-reset', verifyToken, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Only administrators can reset passwords' });
+  const { userId, email, studentId, reason } = req.body || {};
+  if (!reason || String(reason).trim().length < 5) return res.status(400).json({ error: 'A reason (min 5 characters) is required' });
+  let target = null;
+  if (userId) target = await User.findOne({ id: Number(userId) }).lean();
+  else if (email) target = await User.findOne({ email: String(email).toLowerCase() }).lean();
+  else if (studentId) {
+    const st = await Student.findOne({ id: Number(studentId) }).lean();
+    if (st) target = await User.findOne({ id: st.user_id }).lean();
   }
-
-  const user = await User.findOne({ email }).lean();
-  if (!user) {
-    return res.status(404).json({ error: 'No account registered with that email' });
-  }
-
-  const passwordHash = bcrypt.hashSync(newPassword, bcrypt.genSaltSync(10));
-  await User.updateOne({ id: user.id }, { $set: { password_hash: passwordHash } });
-  res.json({ message: 'Password reset successful. You may now log in with your new password.' });
+  if (!target) return res.status(404).json({ error: 'Account not found' });
+  const temp = `GTB-${crypto.randomBytes(3).toString('hex')}-${crypto.randomInt(100, 999)}`;
+  await User.updateOne({ id: target.id }, { $set: { password_hash: bcrypt.hashSync(temp, 10) } });
+  await logAudit({ userId: req.user.id, userRole: req.user.role, userEmail: req.user.email, action: 'PASSWORD_RESET', entityType: 'users', entityId: target.id, newValue: { account: target.email }, reason, ipAddress: req.ip });
+  res.json({ message: `Temporary password issued for ${target.email}`, email: target.email, temporaryPassword: temp });
 });
 
 module.exports = router;

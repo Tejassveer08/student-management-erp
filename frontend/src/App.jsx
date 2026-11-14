@@ -1,259 +1,137 @@
-import React, { useState, useEffect } from 'react';
+import React, { Suspense, lazy, useCallback, useEffect, useState } from 'react';
+import { ShieldAlert, ArrowLeft } from 'lucide-react';
 import { AuthProvider, useAuth } from './context/AuthContext';
-import Navbar from './components/layout/Navbar';
-import Sidebar from './components/layout/Sidebar';
+import { ToastProvider, EmptyState, PageSkeleton } from './components/ui';
+import Topbar from './components/layout/Topbar';
+import Dock from './components/layout/Dock';
+import MenuSheet from './components/layout/MenuSheet';
+import CommandPalette from './components/layout/CommandPalette';
+import { NAV_BY_ID } from './config/nav';
 
-import DashboardView from './views/DashboardView';
-import AttendanceView from './views/AttendanceView';
-import CGPAProbabilityView from './views/CGPAProbabilityView';
-import StudentsView from './views/StudentsView';
-import FacultyView from './views/FacultyView';
-import AcademicsView from './views/AcademicsView';
-import ExamsView from './views/ExamsView';
-import AssignmentsView from './views/AssignmentsView';
-import FeesView from './views/FeesView';
-import NoticesView from './views/NoticesView';
-import LibraryHostelView from './views/LibraryHostelView';
-import PlacementsView from './views/PlacementsView';
-import EngagementView from './views/EngagementView';
-import SocietiesView from './views/SocietiesView';
-import ForumView from './views/ForumView';
-import SettingsView from './views/SettingsView';
+const DashboardView = lazy(() => import('./views/DashboardView'));
+const AttendanceView = lazy(() => import('./views/AttendanceView'));
+const CGPAProbabilityView = lazy(() => import('./views/CGPAProbabilityView'));
+const StudentsView = lazy(() => import('./views/StudentsView'));
+const FacultyView = lazy(() => import('./views/FacultyView'));
+const AcademicsView = lazy(() => import('./views/AcademicsView'));
+const ExamsView = lazy(() => import('./views/ExamsView'));
+const AssignmentsView = lazy(() => import('./views/AssignmentsView'));
+const FeesView = lazy(() => import('./views/FeesView'));
+const NoticesView = lazy(() => import('./views/NoticesView'));
+const LibraryHostelView = lazy(() => import('./views/LibraryHostelView'));
+const PlacementsView = lazy(() => import('./views/PlacementsView'));
+const EngagementView = lazy(() => import('./views/EngagementView'));
+const SocietiesView = lazy(() => import('./views/SocietiesView'));
+const ForumView = lazy(() => import('./views/ForumView'));
+const SettingsView = lazy(() => import('./views/SettingsView'));
 import LoginView from './views/LoginView';
-import { ShieldAlert, ArrowLeft, Home, ChevronRight, Sparkles } from 'lucide-react';
 
-const TAB_PERMISSIONS = {
-  'dashboard': null,
-  'attendance': 'attendance',
-  'cgpa-simulator': 'cgpa_probability',
-  'students': 'students',
-  'faculty': 'faculty',
-  'academics': 'academics',
-  'exams': 'exams',
-  'assignments': 'assignments',
-  'fees': 'fees',
-  'notices': 'notices',
-  'library-hostel': 'library',
-  'placements': 'placements',
-  'engagement': 'engagement',
-  'societies': 'societies',
-  'forum': 'forum',
-  'settings': 'settings'
+const VIEWS = {
+  dashboard: DashboardView,
+  attendance: AttendanceView,
+  'cgpa-simulator': CGPAProbabilityView,
+  students: StudentsView,
+  faculty: FacultyView,
+  academics: AcademicsView,
+  exams: ExamsView,
+  assignments: AssignmentsView,
+  fees: FeesView,
+  notices: NoticesView,
+  'library-hostel': LibraryHostelView,
+  placements: PlacementsView,
+  engagement: EngagementView,
+  societies: SocietiesView,
+  forum: ForumView,
+  settings: SettingsView,
 };
 
-const TAB_LABELS = {
-  'dashboard': 'Dashboard Overview',
-  'attendance': 'Smart Attendance Tracker',
-  'cgpa-simulator': 'CGPA Probability Module',
-  'students': 'Student Academic Dossiers',
-  'faculty': 'Faculty Directory & Workload',
-  'academics': 'Academic Curriculum & Timetable',
-  'exams': 'Examinations & University Results',
-  'assignments': 'Assignments & Courseware Notes',
-  'fees': 'Fees & Digital Receipt Portal',
-  'notices': 'Institutional Bulletins & Circulars',
-  'library-hostel': 'Library & Hostel Administration',
-  'placements': 'Placements & Internship Cell',
-  'engagement': 'Merit Leaderboard & AI Guide',
-  'societies': 'Campus Societies & Duty Attendance',
-  'forum': 'Student-Teacher Q&A Forum',
-  'settings': 'Institutional Governance & Audit Logs'
+const readHash = () => {
+  const id = window.location.hash.replace(/^#\/?/, '').split(/[?/]/)[0];
+  return VIEWS[id] ? id : 'dashboard';
 };
 
-function MainApp() {
-  const { user, loading, hasPermission } = useAuth();
-  const [currentTab, setCurrentTab] = useState('dashboard');
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [viewKey, setViewKey] = useState(0);
-
-  // Trigger view animation on tab change
-  const handleTabChange = (tab) => {
-    setCurrentTab(tab);
-    setViewKey(prev => prev + 1);
-  };
-
-  if (loading) {
-    return (
-      <div style={{
-        minHeight: '100vh',
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: '1.5rem',
-        color: 'var(--text-muted)'
-      }}>
-        {/* Premium loading spinner */}
-        <div style={{ position: 'relative' }}>
-          <div style={{
-            width: '56px',
-            height: '56px',
-            borderRadius: '50%',
-            border: '3px solid var(--border-subtle)',
-            borderTopColor: 'var(--primary)',
-            animation: 'spin 0.8s linear infinite'
-          }}></div>
-          <div style={{
-            position: 'absolute',
-            inset: '6px',
-            borderRadius: '50%',
-            border: '3px solid transparent',
-            borderBottomColor: 'var(--secondary)',
-            animation: 'spin 1.2s linear infinite reverse'
-          }}></div>
-        </div>
-        <div>
-          <div style={{ fontSize: '1.05rem', fontWeight: 700, color: 'var(--text-primary)', textAlign: 'center' }}>
-            Initializing GTBIT ERP
-          </div>
-          <div style={{ fontSize: '0.78rem', textAlign: 'center', marginTop: '0.25rem' }}>
-            Loading your personalized portal...
-          </div>
-        </div>
+function Splash() {
+  return (
+    <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', background: 'radial-gradient(600px 400px at 50% 40%, rgba(79,70,229,0.35), transparent 70%), #070815', color: '#eef0ff' }}>
+      <div className="stack gap-16" style={{ alignItems: 'center' }}>
+        <div className="brand" style={{ color: '#eef0ff', fontSize: 30 }}><span className="brand-tile" style={{ width: 44, height: 44, fontSize: 24, borderRadius: 14 }}>G</span>GTBIT</div>
+        <div className="row gap-8 xs" style={{ color: '#9599bd' }}><span className="spinner" style={{ width: 12, height: 12 }} /> Opening your portal…</div>
       </div>
-    );
-  }
+    </div>
+  );
+}
 
-  if (!user) {
-    return <LoginView />;
-  }
+function Shell() {
+  const { user, loading, hasPermission } = useAuth();
+  const [tab, setTab] = useState(readHash);
+  const [menu, setMenu] = useState(false);
+  const [palette, setPalette] = useState(false);
 
-  // Permission Guard
-  const requiredModule = TAB_PERMISSIONS[currentTab];
-  const isAuthorized = !requiredModule || hasPermission(requiredModule, 'read');
+  useEffect(() => {
+    const onHash = () => setTab(readHash());
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, []);
 
-  const renderActiveView = () => {
-    if (!isAuthorized) {
-      return (
-        <div className="glass-panel animate-scale-in" style={{
-          padding: '3rem 2.5rem',
-          textAlign: 'center',
-          maxWidth: '550px',
-          margin: '3rem auto',
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          gap: '1rem',
-          border: '1px solid var(--danger-border)',
-          background: 'var(--bg-surface)'
-        }}>
-          <div style={{
-            width: '72px',
-            height: '72px',
-            borderRadius: '50%',
-            background: 'var(--danger-bg)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            color: 'var(--danger)',
-            border: '2px solid var(--danger-border)',
-            boxShadow: '0 4px 16px rgba(239, 68, 68, 0.15)'
-          }}>
-            <ShieldAlert size={36} />
-          </div>
-          <h2 style={{ fontSize: '1.35rem', color: 'var(--danger)', fontWeight: 800 }}>Access Prohibited</h2>
-          <p style={{ color: 'var(--text-secondary)', fontSize: '0.88rem', lineHeight: 1.7 }}>
-            Your current role (<strong style={{ textTransform: 'capitalize', color: 'var(--text-primary)' }}>{user.role}</strong>) does not have authorization to view <strong>{TAB_LABELS[currentTab] || currentTab}</strong>.
-          </p>
-          <button 
-            onClick={() => handleTabChange('dashboard')} 
-            className="btn btn-primary"
-            style={{ marginTop: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}
-          >
-            <ArrowLeft size={16} /> Return to Dashboard
-          </button>
-        </div>
-      );
-    }
+  const navigate = useCallback((id) => {
+    if (!VIEWS[id]) return;
+    if (window.location.hash !== `#/${id}`) window.location.hash = `/${id}`;
+    setTab(id);
+    setMenu(false);
+    window.scrollTo({ top: 0, behavior: 'instant' in window ? 'instant' : 'auto' });
+  }, []);
 
-    switch (currentTab) {
-      case 'dashboard': return <DashboardView onNavigate={handleTabChange} />;
-      case 'attendance': return <AttendanceView />;
-      case 'cgpa-simulator': return <CGPAProbabilityView />;
-      case 'students': return <StudentsView />;
-      case 'faculty': return <FacultyView />;
-      case 'academics': return <AcademicsView />;
-      case 'exams': return <ExamsView />;
-      case 'assignments': return <AssignmentsView />;
-      case 'fees': return <FeesView />;
-      case 'notices': return <NoticesView />;
-      case 'library-hostel': return <LibraryHostelView />;
-      case 'placements': return <PlacementsView />;
-      case 'engagement': return <EngagementView />;
-      case 'societies': return <SocietiesView onNavigate={handleTabChange} />;
-      case 'forum': return <ForumView />;
-      case 'settings': return <SettingsView />;
-      default: return <DashboardView onNavigate={handleTabChange} />;
-    }
-  };
+  useEffect(() => {
+    const onKey = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setPalette((p) => !p);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  useEffect(() => {
+    const t = NAV_BY_ID[tab]?.title;
+    document.title = t ? `${t} · GTBIT ERP` : 'GTBIT ERP';
+  }, [tab]);
+
+  if (loading) return <Splash />;
+  if (!user) return <LoginView />;
+
+  const meta = NAV_BY_ID[tab];
+  const allowed = !meta?.module || hasPermission(meta.module, 'read');
+  const View = VIEWS[tab];
 
   return (
-    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', position: 'relative' }}>
-      {/* Sticky Top Navbar */}
-      <Navbar onMenuToggle={() => setMobileMenuOpen(!mobileMenuOpen)} />
-
-      {/* Main Content Area */}
-      <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-        <Sidebar currentTab={currentTab} setCurrentTab={handleTabChange} />
-
-        <main style={{
-          flex: 1,
-          padding: '1.25rem 1.5rem',
-          overflowY: 'auto',
-          maxWidth: '1600px',
-          margin: '0 auto',
-          width: '100%',
-          position: 'relative',
-          zIndex: 1
-        }}>
-          {/* Breadcrumbs */}
-          <div className="animate-slide-up" style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.4rem',
-            fontSize: '0.76rem',
-            color: 'var(--text-muted)',
-            marginBottom: '1rem',
-            fontWeight: 500,
-            padding: '0.4rem 0.75rem',
-            background: 'var(--bg-surface-subtle)',
-            borderRadius: 'var(--radius-full)',
-            width: 'fit-content',
-            border: '1px solid var(--border-subtle)'
-          }}>
-            <button 
-              onClick={() => handleTabChange('dashboard')}
-              style={{
-                background: 'none',
-                border: 'none',
-                padding: 0,
-                color: 'var(--text-muted)',
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '0.25rem',
-                fontSize: 'inherit',
-                fontFamily: 'inherit',
-                transition: 'color 0.15s ease'
-              }}
-              onMouseEnter={(e) => e.currentTarget.style.color = 'var(--role-accent)'}
-              onMouseLeave={(e) => e.currentTarget.style.color = 'var(--text-muted)'}
-            >
-              <Home size={12} />
-              <span>Portal</span>
-            </button>
-            <ChevronRight size={11} style={{ opacity: 0.5 }} />
-            <span style={{ color: 'var(--role-accent)', fontWeight: 700 }}>
-              {TAB_LABELS[currentTab] || currentTab}
-            </span>
-          </div>
-
-          {/* View Content with transition key */}
-          <div key={viewKey} className="animate-view-in">
-            {renderActiveView()}
+    <div className="shell">
+      <Topbar onNavigate={navigate} />
+      <div className="main">
+        <main className="content">
+          <div key={tab} className="view-enter">
+            {allowed ? (
+              <Suspense fallback={<PageSkeleton />}><View onNavigate={navigate} /></Suspense>
+            ) : (
+              <div className="card" style={{ maxWidth: 520, margin: '8vh auto' }}>
+                <EmptyState
+                  icon={ShieldAlert}
+                  title="You don’t have access to this module"
+                  description={`Your ${user.role} account isn’t permitted to open ${meta?.title || tab}. Ask the administrator if you think this is a mistake.`}
+                  action={<button className="btn btn-primary btn-sm" onClick={() => navigate('dashboard')}><ArrowLeft size={14} /> Back to dashboard</button>}
+                />
+              </div>
+            )}
           </div>
         </main>
+        <footer className="app-foot no-print">
+          <span>GTBIT — Guru Tegh Bahadur Institute of Technology · GGSIPU, New Delhi</span>
+          <span>Student Management ERP · B.Tech CSE 2023–27</span>
+        </footer>
       </div>
+      <Dock current={tab} onNavigate={navigate} onOpenMenu={() => setMenu(true)} onOpenPalette={() => setPalette(true)} />
+      <MenuSheet open={menu} onClose={() => setMenu(false)} current={tab} onNavigate={navigate} />
+      <CommandPalette open={palette} onClose={() => setPalette(false)} onNavigate={navigate} />
     </div>
   );
 }
@@ -261,7 +139,9 @@ function MainApp() {
 export default function App() {
   return (
     <AuthProvider>
-      <MainApp />
+      <ToastProvider>
+        <Shell />
+      </ToastProvider>
     </AuthProvider>
   );
 }

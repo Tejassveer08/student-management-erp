@@ -7,10 +7,13 @@ const {
   Society,
   User,
   FacultyClassMap,
+  Student,
   getNextId
 } = require('../db/database');
 const { verifyToken, requirePermission } = require('../middleware/authMiddleware');
 const { facultyTeachesSubject } = require('../services/attendanceCredit');
+const { subjectsForStudent } = require('../services/scope');
+const { notifyUsers } = require('../services/notify');
 
 const router = express.Router();
 
@@ -20,7 +23,8 @@ async function getUserScopedSubjectIds(req) {
     return subs.map(r => r.id);
   }
   if (req.user.role === 'student' && req.student) {
-    const subs = await Subject.find({ semester: req.student.semester }, { id: 1 }).lean();
+    const st = await Student.findOne({ id: req.student.id }).lean();
+    const subs = await subjectsForStudent(st);
     return subs.map(r => r.id);
   }
   if (req.user.role === 'faculty' && req.faculty) {
@@ -285,6 +289,20 @@ router.post('/threads/:id/posts', verifyToken, requirePermission('forum', 'reply
 
     await ForumThread.updateOne({ id: threadId }, { $set: { last_activity_at: new Date().toISOString() } });
 
+    // Tell the thread author (and the person being replied to) — never the replier themselves
+    const recipients = new Set([thread.author_id]);
+    if (parentPostId) {
+      const parent = await ForumPost.findOne({ id: Number(parentPostId) }, 'author_id').lean();
+      if (parent) recipients.add(parent.author_id);
+    }
+    recipients.delete(req.user.id);
+    await notifyUsers([...recipients], {
+      title: `New reply: ${thread.title.slice(0, 60)}`,
+      message: `${req.user.full_name}${req.user.role === 'faculty' ? ' (faculty)' : ''}: ${body.trim().slice(0, 140)}`,
+      type: 'forum',
+      link: '/forum'
+    });
+
     res.status(201).json({ id, message: 'Reply posted' });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -349,6 +367,9 @@ router.put('/posts/:postId/verify', verifyToken, requirePermission('forum', 'ver
     const anyVerified = await ForumPost.findOne({ thread_id: thread.id, is_faculty_answer: 1 }).lean();
     await ForumThread.updateOne({ id: thread.id }, { $set: { is_resolved: anyVerified ? 1 : 0 } });
 
+    if (nextState && post.author_id !== req.user.id) {
+      await notifyUsers([post.author_id], { title: 'Your answer was verified', message: `${req.user.full_name} marked your answer in "${thread.title.slice(0, 60)}" as correct.`, type: 'forum', link: '/forum' });
+    }
     res.json({ postId, is_faculty_answer: nextState, is_resolved: anyVerified ? 1 : 0 });
   } catch (err) {
     res.status(500).json({ error: err.message });

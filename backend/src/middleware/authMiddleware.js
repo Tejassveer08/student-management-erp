@@ -2,7 +2,11 @@ const jwt = require('jsonwebtoken');
 const { User, Faculty, FacultyClassMap, Subject, Student, WardLink, AuditLog, getNextId } = require('../db/database');
 const permissions = require('../config/permissions.json');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'erp_gtbit_jwt_secret_super_secure_key_2026';
+const JWT_SECRET = process.env.JWT_SECRET || (process.env.NODE_ENV === 'production' ? null : 'gtbit-erp-development-only-secret');
+if (!JWT_SECRET) {
+  throw new Error('JWT_SECRET must be set in the environment when NODE_ENV=production');
+}
+if (!process.env.JWT_SECRET) console.warn('⚠️  JWT_SECRET is not set — using a development-only secret. Set it in backend/.env.');
 
 async function verifyToken(req, res, next) {
   const authHeader = req.headers.authorization;

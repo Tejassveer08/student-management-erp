@@ -1,815 +1,370 @@
-import React, { useState, useEffect } from 'react';
-import { useAuth } from '../context/AuthContext';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
-  Flag,
-  Users,
-  Search,
-  Send,
-  CheckCircle2,
-  XCircle,
-  Clock,
-  MessageSquare,
-  CalendarCheck,
-  ShieldCheck,
-  Edit3,
-  Plus,
-  X
+  Flag, Users, Plus, Send, MessageSquare, Pencil, Inbox, CheckCircle2, XCircle, Clock, CalendarDays, UserCheck, Crown, GraduationCap,
 } from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
+import { useApi, asList } from '../lib/api';
+import { useLoader, settle } from '../lib/hooks';
+import { fmtDate, timeAgo, titleCase, statusTone } from '../lib/format';
+import {
+  PageHeader, Card, Badge, Avatar, Tabs, Modal, Field, EmptyState, ErrorState, PageSkeleton, Chips, SearchInput, Callout, Skeleton, Stat, useToast,
+} from '../components/ui';
+
+const CAT_HUE = { Technical: 228, Cultural: 330, Entrepreneurial: 32, Literary: 160, Sports: 10, Social: 190, General: 260 };
+const hueOf = (c) => CAT_HUE[c] ?? 260;
+const mono = (name = '') => name.replace(/^(The|GTBIT)\s+/i, '').split(/\s+/).filter((w) => /^[A-Za-z]/.test(w)).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
 
 export default function SocietiesView({ onNavigate }) {
-  const { user, token } = useAuth();
-  const isFaculty = user?.role === 'faculty';
-  const isAdmin = user?.role === 'admin';
+  const { user } = useAuth();
   const isStudent = user?.role === 'student';
   const isParent = user?.role === 'parent';
+  const isAdmin = user?.role === 'admin';
+  const isFaculty = user?.role === 'faculty';
+  const [tab, setTab] = useState(isParent || isFaculty ? 'duty' : 'directory');
+  const [duty, setDuty] = useState(false);
 
-  const [activeTab, setActiveTab] = useState(isFaculty || isParent ? 'duty' : 'directory');
-  const [societies, setSocieties] = useState([]);
-  const [dutyRequests, setDutyRequests] = useState([]);
-  const [subjects, setSubjects] = useState([]);
-  const [studentsList, setStudentsList] = useState([]);
-  const [facultyList, setFacultyList] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [toast, setToast] = useState(null);
-
-  // Filters
-  const [searchQuery, setSearchQuery] = useState('');
-  const [categoryFilter, setCategoryFilter] = useState('All');
-
-  // Apply Modal (Student)
-  const [applySociety, setApplySociety] = useState(null);
-  const [applyMessage, setApplyMessage] = useState('');
-
-  // Direct Contact Coordinator Modal (Student)
-  const [contactSociety, setContactSociety] = useState(null);
-  const [contactMessage, setContactMessage] = useState('');
-
-  // Coordinator Applications Drawer/Modal
-  const [coordSocietyId, setCoordSocietyId] = useState(null);
-  const [coordApplications, setCoordApplications] = useState([]);
-
-  // Admin Edit Society Modal
-  const [editSociety, setEditSociety] = useState(null);
-  const [editForm, setEditForm] = useState({ description: '', category: '', coordinatorStudentId: '', coordinatorFacultyId: '' });
-
-  // Submit Society Duty Attendance Request Modal (Student)
-  const [showDutyModal, setShowDutyModal] = useState(false);
-  const [dutyForm, setDutyForm] = useState({
-    societyId: '',
-    classSubjectId: '',
-    date: new Date().toISOString().split('T')[0],
-    sessionPeriod: '10:00 - 11:00',
-    activityTitle: '',
-    reason: ''
-  });
-
-  // Faculty Review Remarks map
-  const [remarksMap, setRemarksMap] = useState({});
-
-  const showToastMsg = (msg) => {
-    setToast(msg);
-    setTimeout(() => setToast(null), 4000);
-  };
-
-  useEffect(() => {
-    if (token) fetchAll();
-  }, [token, user?.role]);
-
-  async function fetchAll() {
-    setLoading(true);
-    try {
-      const reqs = [
-        fetch('/api/societies', { headers: { Authorization: `Bearer ${token}` } }),
-        fetch('/api/societies/attendance-requests', { headers: { Authorization: `Bearer ${token}` } }),
-        fetch('/api/academics/subjects?semester=4', { headers: { Authorization: `Bearer ${token}` } })
-      ];
-      if (isAdmin) {
-        reqs.push(fetch('/api/students?semester=4', { headers: { Authorization: `Bearer ${token}` } }));
-        reqs.push(fetch('/api/faculty', { headers: { Authorization: `Bearer ${token}` } }));
-      }
-
-      const [socRes, dutyRes, subRes, stRes, facRes] = await Promise.all(reqs);
-
-      if (socRes?.ok) {
-        const sData = await socRes.json();
-        setSocieties(sData);
-        if (sData.length > 0 && !dutyForm.societyId) {
-          setDutyForm(prev => ({ ...prev, societyId: sData[0].id }));
-        }
-        const coordinated = sData.find(s => s.is_coordinator);
-        if (coordinated && !coordSocietyId) {
-          setCoordSocietyId(coordinated.id);
-        }
-      }
-      if (dutyRes?.ok) setDutyRequests(await dutyRes.json());
-      if (subRes?.ok) {
-        const subData = await subRes.json();
-        setSubjects(subData);
-        if (subData.length > 0 && !dutyForm.classSubjectId) {
-          setDutyForm(prev => ({ ...prev, classSubjectId: subData[0].id }));
-        }
-      }
-      if (stRes?.ok) setStudentsList(await stRes.json());
-      if (facRes?.ok) setFacultyList(await facRes.json());
-    } catch (err) {
-      console.error('Error loading societies data:', err);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  const coordinatedSocieties = societies.filter(s => s.is_coordinator);
-
-  useEffect(() => {
-    if (coordSocietyId && token && (isAdmin || coordinatedSocieties.some(s => s.id === Number(coordSocietyId)))) {
-      loadApplications(coordSocietyId);
-    }
-  }, [coordSocietyId, societies.length]);
-
-  async function loadApplications(socId) {
-    try {
-      const res = await fetch(`/api/societies/${socId}/applications`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      if (res.ok) setCoordApplications(await res.json());
-    } catch (err) {
-      console.error('Error loading applications:', err);
-    }
-  }
-
-  const handleApplySubmit = async (e) => {
-    e.preventDefault();
-    if (!applySociety) return;
-    const res = await fetch(`/api/societies/${applySociety.id}/apply`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ applicationMessage: applyMessage })
-    });
-    const data = await res.json();
-    if (res.ok) {
-      showToastMsg(data.message);
-      setApplySociety(null);
-      setApplyMessage('');
-      fetchAll();
-    } else {
-      alert(data.error || 'Failed to submit application');
-    }
-  };
-
-  const handleContactSubmit = async (e) => {
-    e.preventDefault();
-    if (!contactSociety || !contactMessage.trim()) return;
-    const res = await fetch(`/api/societies/${contactSociety.id}/contact`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: contactMessage })
-    });
-    const data = await res.json();
-    if (res.ok) {
-      showToastMsg(`Message sent to ${contactSociety.name} coordinator via Forum!`);
-      setContactSociety(null);
-      setContactMessage('');
-    } else {
-      alert(data.error || 'Could not send message');
-    }
-  };
-
-  const handleDecideApplication = async (applicationId, status) => {
-    const res = await fetch(`/api/societies/applications/${applicationId}/decide`, {
-      method: 'PUT',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status })
-    });
-    const data = await res.json();
-    if (res.ok) {
-      showToastMsg(`Application ${status}!`);
-      if (coordSocietyId) loadApplications(coordSocietyId);
-      fetchAll();
-    } else {
-      alert(data.error || 'Action failed');
-    }
-  };
-
-  const handleDutySubmit = async (e) => {
-    e.preventDefault();
-    const res = await fetch('/api/societies/attendance-requests', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(dutyForm)
-    });
-    const data = await res.json();
-    if (res.ok) {
-      showToastMsg(data.message);
-      setShowDutyModal(false);
-      setDutyForm(prev => ({ ...prev, activityTitle: '', reason: '' }));
-      fetchAll();
-    } else {
-      alert(data.error || 'Failed to submit duty request');
-    }
-  };
-
-  const handleDecideDuty = async (reqId, status) => {
-    const res = await fetch(`/api/societies/attendance-requests/${reqId}/decide`, {
-      method: 'PUT',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status, remarks: remarksMap[reqId] || '' })
-    });
-    const data = await res.json();
-    if (res.ok) {
-      showToastMsg(data.message);
-      fetchAll();
-    } else {
-      alert(data.error || 'Decision failed');
-    }
-  };
-
-  const handleAdminSaveSociety = async (e) => {
-    e.preventDefault();
-    if (!editSociety) return;
-    const res = await fetch(`/api/societies/${editSociety.id}`, {
-      method: 'PUT',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        description: editForm.description,
-        category: editForm.category,
-        coordinatorStudentId: editForm.coordinatorStudentId ? Number(editForm.coordinatorStudentId) : null,
-        coordinatorFacultyId: editForm.coordinatorFacultyId ? Number(editForm.coordinatorFacultyId) : null
-      })
-    });
-    if (res.ok) {
-      showToastMsg(`${editSociety.name} updated successfully!`);
-      setEditSociety(null);
-      fetchAll();
-    } else {
-      const err = await res.json();
-      alert(err.error || 'Update failed');
-    }
-  };
-
-  const categories = ['All', ...Array.from(new Set(societies.map(s => s.category || 'General')))];
-  const filteredSocieties = societies.filter(s => {
-    const matchesCat = categoryFilter === 'All' || s.category === categoryFilter;
-    const matchesSearch = !searchQuery.trim() ||
-      s.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (s.description || '').toLowerCase().includes(searchQuery.toLowerCase());
-    return matchesCat && matchesSearch;
-  });
-
-  const pendingDutyCount = dutyRequests.filter(r => r.status === 'pending').length;
+  const { data, loading, error, hardReload, reload } = useLoader((api) => Promise.all([
+    settle(api('/societies'), []),
+    settle(api('/societies/attendance-requests'), []),
+  ]));
+  if (loading) return <PageSkeleton />;
+  if (error) return <ErrorState error={error} onRetry={hardReload} />;
+  const societies = asList(data[0]);
+  const requests = asList(data[1]);
+  const coordinated = societies.filter((s) => s.is_coordinator);
+  const pending = requests.filter((r) => r.status === 'pending').length;
+  const canCoord = isAdmin || coordinated.length > 0;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-      {toast && (
-        <div style={{
-          padding: '0.85rem 1.25rem',
-          borderRadius: 'var(--radius-md)',
-          background: 'var(--success-bg)',
-          border: '1px solid var(--success-border)',
-          color: 'var(--success)',
-          fontWeight: 700,
-          display: 'flex',
-          alignItems: 'center',
-          gap: '0.5rem'
-        }}>
-          <CheckCircle2 size={18} />
-          {toast}
+    <>
+      <PageHeader
+        eyebrow="Student life"
+        title={<>Societies & <em>duty leave</em></>}
+        description={isParent
+          ? 'Your ward’s society-duty attendance requests and their approval status.'
+          : 'Twenty-nine GTBIT societies — join, message coordinators, and get class attendance credited for approved society work.'}
+        actions={isStudent && <button className="btn btn-accent" onClick={() => setDuty(true)}><Plus size={15} /> Request duty leave</button>}
+      />
+
+      <Tabs value={tab} onChange={setTab} tabs={[
+        !isParent && { id: 'directory', label: 'Directory', icon: Flag, count: societies.length },
+        { id: 'duty', label: isFaculty ? 'Duty-leave queue' : 'Duty leave', icon: CalendarDays, count: pending || undefined },
+        canCoord && { id: 'coord', label: 'Coordinator desk', icon: Inbox, count: coordinated.reduce((a, s) => a + (s.pending_applications_count || 0), 0) || undefined },
+      ]} />
+
+      {tab === 'directory' && <Directory societies={societies} reload={reload} onNavigate={onNavigate} />}
+      {tab === 'duty' && <DutyQueue requests={requests} reload={reload} />}
+      {tab === 'coord' && canCoord && <CoordinatorDesk societies={isAdmin ? societies : coordinated} reload={reload} />}
+
+      {isStudent && <DutyModal open={duty} onClose={() => setDuty(false)} societies={societies} onDone={() => { setDuty(false); reload(); setTab('duty'); }} />}
+    </>
+  );
+}
+
+/* ---------------------------------------------------------------------- */
+function Directory({ societies, reload, onNavigate }) {
+  const { user } = useAuth();
+  const isStudent = user?.role === 'student';
+  const isAdmin = user?.role === 'admin';
+  const [cat, setCat] = useState('All');
+  const [q, setQ] = useState('');
+  const [apply, setApply] = useState(null);
+  const [contact, setContact] = useState(null);
+  const [edit, setEdit] = useState(null);
+  const cats = useMemo(() => ['All', ...new Set(societies.map((s) => s.category || 'General'))], [societies]);
+  const list = societies.filter((s) => (cat === 'All' || s.category === cat) && (!q || `${s.name} ${s.description}`.toLowerCase().includes(q.toLowerCase())))
+    .sort((a, b) => (b.approved_member_count || 0) - (a.approved_member_count || 0) || a.name.localeCompare(b.name));
+  const mine = societies.filter((s) => s.my_membership?.status === 'approved' || s.is_coordinator);
+
+  return (
+    <div className="stack gap-16">
+      {isStudent && (
+        <div className="grid-3">
+          <Stat label="Societies on campus" value={societies.length} icon={Flag} tone="accent" />
+          <Stat label="Your memberships" value={mine.length} icon={UserCheck} tone="success" hint={mine.map((s) => s.name).join(', ') || 'Apply to one below'} />
+          <Stat label="Applications pending" value={societies.filter((s) => s.my_membership?.status === 'pending').length} icon={Clock} tone="warning" />
         </div>
       )}
-
-      {/* Header Banner */}
-      <div className="glass-panel" style={{
-        padding: '1.5rem 2rem',
-        background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.12) 0%, rgba(79, 70, 229, 0.08) 100%)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        flexWrap: 'wrap',
-        gap: '1rem',
-        borderLeft: '5px solid var(--role-accent)'
-      }}>
-        <div>
-          <div className="badge badge-primary" style={{ marginBottom: '0.4rem' }}>
-            GTBIT Student Societies & Duty Leave
-          </div>
-          <h1 style={{ fontSize: '1.75rem', fontWeight: 800 }}>Campus Societies & Duty Attendance</h1>
-          <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginTop: '0.2rem' }}>
-            {isParent
-              ? 'Read-only view of your ward’s society-duty attendance exemptions and approval status.'
-              : 'Browse GTBIT societies, apply for membership, message coordinators, and manage society-duty attendance credits.'}
-          </p>
-        </div>
-
-        <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'center' }}>
-          {isStudent && (
-            <button onClick={() => setShowDutyModal(true)} className="btn btn-primary btn-sm">
-              <Plus size={16} /> Request Society Duty Attendance
-            </button>
-          )}
-
-          {!isParent && (
-            <div style={{ display: 'flex', background: 'var(--bg-surface-subtle)', padding: '0.25rem', borderRadius: 'var(--radius-md)', gap: '0.2rem' }}>
-              <button
-                onClick={() => setActiveTab('directory')}
-                style={{
-                  padding: '0.4rem 0.85rem',
-                  borderRadius: 'var(--radius-sm)',
-                  border: 'none',
-                  fontSize: '0.8rem',
-                  fontWeight: activeTab === 'directory' ? 700 : 500,
-                  cursor: 'pointer',
-                  background: activeTab === 'directory' ? 'var(--primary)' : 'transparent',
-                  color: activeTab === 'directory' ? '#fff' : 'var(--text-secondary)'
-                }}
-              >
-                Societies ({societies.length})
-              </button>
-
-              <button
-                onClick={() => setActiveTab('duty')}
-                style={{
-                  padding: '0.4rem 0.85rem',
-                  borderRadius: 'var(--radius-sm)',
-                  border: 'none',
-                  fontSize: '0.8rem',
-                  fontWeight: activeTab === 'duty' ? 700 : 500,
-                  cursor: 'pointer',
-                  background: activeTab === 'duty' ? 'var(--primary)' : 'transparent',
-                  color: activeTab === 'duty' ? '#fff' : 'var(--text-secondary)'
-                }}
-              >
-                Duty Attendance ({pendingDutyCount} pending)
-              </button>
-
-              {(isAdmin || coordinatedSocieties.length > 0) && (
-                <button
-                  onClick={() => setActiveTab('coordinator')}
-                  style={{
-                    padding: '0.4rem 0.85rem',
-                    borderRadius: 'var(--radius-sm)',
-                    border: 'none',
-                    fontSize: '0.8rem',
-                    fontWeight: activeTab === 'coordinator' ? 700 : 500,
-                    cursor: 'pointer',
-                    background: activeTab === 'coordinator' ? 'var(--primary)' : 'transparent',
-                    color: activeTab === 'coordinator' ? '#fff' : 'var(--text-secondary)'
-                  }}
-                >
-                  Coordinator Queue
-                </button>
-              )}
-            </div>
-          )}
-        </div>
+      <div className="row-between wrap" style={{ gap: 10 }}>
+        <Chips value={cat} onChange={setCat} options={cats.map((c) => ({ value: c, label: c, count: c === 'All' ? societies.length : societies.filter((s) => s.category === c).length }))} />
+        <SearchInput value={q} onChange={setQ} placeholder="Search societies" style={{ width: 260 }} />
       </div>
-
-      {/* TAB 1: SOCIETIES DIRECTORY */}
-      {activeTab === 'directory' && !isParent && (
-        <>
-          <div className="glass-panel" style={{ padding: '1rem 1.25rem', display: 'flex', gap: '1rem', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between' }}>
-            <div style={{ position: 'relative', flex: '1 1 260px', maxWidth: '420px' }}>
-              <Search size={16} style={{ position: 'absolute', left: '0.75rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
-              <input
-                type="text"
-                className="form-input"
-                style={{ paddingLeft: '2.25rem' }}
-                placeholder="Search GTBIT societies..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-              />
-            </div>
-
-            <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
-              {categories.map(cat => (
-                <button
-                  key={cat}
-                  onClick={() => setCategoryFilter(cat)}
-                  className={`btn btn-sm ${categoryFilter === cat ? 'btn-primary' : 'btn-secondary'}`}
-                >
-                  {cat}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(310px, 1fr))', gap: '1rem' }}>
-            {filteredSocieties.map(soc => {
-              const myMem = soc.my_membership;
-              return (
-                <div key={soc.id} className="glass-panel" style={{ padding: '1.35rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.5rem' }}>
-                    <div>
-                      <span className="badge badge-info" style={{ fontSize: '0.68rem', marginBottom: '0.35rem' }}>
-                        {soc.category || 'General'}
-                      </span>
-                      <h3 style={{ fontSize: '1.08rem', fontWeight: 800 }}>{soc.name}</h3>
+      {list.length === 0 ? <div className="card"><EmptyState icon={Flag} title="No societies match" /></div> : (
+        <div className="grid-auto" style={{ '--min': '320px' }}>
+          {list.map((s) => {
+            const m = s.my_membership;
+            const h = hueOf(s.category);
+            return (
+              <Card key={s.id} className="rise">
+                <div className="row gap-12" style={{ alignItems: 'flex-start' }}>
+                  <div style={{ width: 48, height: 48, flexShrink: 0, display: 'grid', placeItems: 'center', fontWeight: 700, fontSize: 15, color: `hsl(${h} 60% var(--mono-l))`, background: `hsl(${h} 70% 50% / 0.12)`, border: `1px solid hsl(${h} 60% 50% / 0.25)` }}>{mono(s.name)}</div>
+                  <div className="grow">
+                    <div className="strong" style={{ fontSize: 15 }}>{s.name}</div>
+                    <div className="row gap-6 wrap" style={{ marginTop: 4 }}>
+                      <Badge>{s.category || 'General'}</Badge>
+                      {s.is_coordinator && <Badge tone="saffron"><Crown size={10} /> You coordinate</Badge>}
+                      {!s.is_coordinator && m && <Badge tone={statusTone(m.status)} dot>{titleCase(m.status)}</Badge>}
                     </div>
-                    {soc.is_coordinator && (
-                      <span className="badge badge-warning">You are Coordinator</span>
-                    )}
-                    {!soc.is_coordinator && myMem && (
-                      <span className={`badge badge-${myMem.status === 'approved' ? 'success' : myMem.status === 'rejected' ? 'danger' : 'warning'}`}>
-                        {myMem.status.toUpperCase()}
-                      </span>
-                    )}
-                  </div>
-
-                  <p style={{ fontSize: '0.83rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
-                    {soc.description}
-                  </p>
-
-                  <div style={{
-                    padding: '0.65rem 0.75rem',
-                    borderRadius: 'var(--radius-md)',
-                    background: 'var(--bg-surface-subtle)',
-                    fontSize: '0.76rem',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '0.25rem'
-                  }}>
-                    <div>
-                      Student Coordinator:{' '}
-                      <strong>{soc.coordinator_student_name ? `${soc.coordinator_student_name} (${soc.coordinator_student_roll})` : 'Unassigned'}</strong>
-                    </div>
-                    <div>
-                      Faculty Mentor: <strong>{soc.coordinator_faculty_name || 'Unassigned'}</strong> • Members: <strong>{soc.approved_member_count || 0}</strong>
-                    </div>
-                  </div>
-
-                  <div style={{ display: 'flex', gap: '0.5rem', marginTop: 'auto', paddingTop: '0.4rem', flexWrap: 'wrap' }}>
-                    {isStudent && !soc.is_coordinator && myMem?.status !== 'approved' && (
-                      <button onClick={() => setApplySociety(soc)} className="btn btn-primary btn-sm" style={{ flex: 1 }}>
-                        <Send size={14} /> {myMem?.status === 'pending' ? 'Update Application' : 'Apply to Join'}
-                      </button>
-                    )}
-
-                    {isStudent && (
-                      <button onClick={() => setContactSociety(soc)} className="btn btn-outline btn-sm">
-                        <MessageSquare size={14} /> Message Coordinator
-                      </button>
-                    )}
-
-                    {isAdmin && (
-                      <>
-                        <button
-                          onClick={() => {
-                            setEditSociety(soc);
-                            setEditForm({
-                              description: soc.description || '',
-                              category: soc.category || 'General',
-                              coordinatorStudentId: soc.coordinator_student_id || '',
-                              coordinatorFacultyId: soc.coordinator_faculty_id || ''
-                            });
-                          }}
-                          className="btn btn-secondary btn-sm"
-                        >
-                          <Edit3 size={14} /> Configure
-                        </button>
-                        <button
-                          onClick={() => {
-                            setCoordSocietyId(soc.id);
-                            setActiveTab('coordinator');
-                          }}
-                          className="btn btn-outline btn-sm"
-                        >
-                          Applications ({soc.pending_applications_count || 0})
-                        </button>
-                      </>
-                    )}
                   </div>
                 </div>
-              );
-            })}
-          </div>
-        </>
-      )}
-
-      {/* TAB 2: SOCIETY DUTY ATTENDANCE QUEUE / HISTORY */}
-      {activeTab === 'duty' && (
-        <div className="glass-panel" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
-            <div>
-              <h3 style={{ fontSize: '1.15rem', fontWeight: 800 }}>
-                {isFaculty ? 'Faculty Society Attendance Approval Queue' : isParent ? 'Ward’s Society Duty Attendance History' : 'Society Duty Attendance Requests'}
-              </h3>
-              <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                Approved requests mark matching lecture sessions as Present (Society Duty), counting toward the 75% GGSIPU threshold.
-              </p>
-            </div>
-            {isStudent && (
-              <button onClick={() => setShowDutyModal(true)} className="btn btn-primary btn-sm">
-                <Plus size={15} /> New Duty Request
-              </button>
-            )}
-          </div>
-
-          {dutyRequests.length === 0 ? (
-            <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>
-              No society attendance exemption requests found.
-            </div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
-              {dutyRequests.map(req => (
-                <div key={req.id} style={{
-                  padding: '1.15rem 1.25rem',
-                  borderRadius: 'var(--radius-md)',
-                  background: 'var(--bg-surface-subtle)',
-                  border: `1px solid ${req.status === 'pending' ? 'var(--warning-border)' : 'var(--border-subtle)'}`,
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '0.6rem'
-                }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '0.5rem' }}>
-                    <div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                        <span style={{ fontWeight: 800, fontSize: '1rem' }}>{req.activity_title}</span>
-                        <span className="badge badge-primary">{req.society_name}</span>
-                        <span className="badge badge-info">{req.subject_code} — {req.subject_name}</span>
-                      </div>
-                      <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
-                        Student: <strong>{req.student_name}</strong> ({req.roll_no}) • Date: <strong>{req.date}</strong> {req.session_period ? `(${req.session_period})` : ''} • Routed to: <strong>{req.assigned_faculty_name || 'Subject Faculty'}</strong>
-                      </div>
-                    </div>
-
-                    <span className={`badge badge-${req.status === 'approved' ? 'success' : req.status === 'rejected' ? 'danger' : 'warning'}`}>
-                      {req.status.toUpperCase()}
-                    </span>
-                  </div>
-
-                  {req.reason && (
-                    <div style={{ fontSize: '0.83rem', color: 'var(--text-secondary)' }}>
-                      {req.reason}
-                    </div>
-                  )}
-
-                  {req.reviewer_remarks && (
-                    <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>
-                      Faculty Remarks: "{req.reviewer_remarks}"
-                    </div>
-                  )}
-
-                  {(isFaculty || isAdmin) && req.status === 'pending' && (
-                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap', paddingTop: '0.4rem', borderTop: '1px solid var(--border-subtle)' }}>
-                      <input
-                        type="text"
-                        className="form-input"
-                        style={{ flex: '1 1 220px', padding: '0.35rem 0.65rem', fontSize: '0.8rem' }}
-                        placeholder="Optional approval/rejection remarks..."
-                        value={remarksMap[req.id] || ''}
-                        onChange={(e) => setRemarksMap(prev => ({ ...prev, [req.id]: e.target.value }))}
-                      />
-                      <button onClick={() => handleDecideDuty(req.id, 'approved')} className="btn btn-success btn-sm">
-                        <CheckCircle2 size={14} /> Approve & Credit Present
-                      </button>
-                      <button onClick={() => handleDecideDuty(req.id, 'rejected')} className="btn btn-danger btn-sm">
-                        <XCircle size={14} /> Reject
-                      </button>
-                    </div>
-                  )}
+                <p className="small muted clamp-3" style={{ marginTop: 12, minHeight: 40 }}>{s.description}</p>
+                <div className="tile-sm stack gap-4 xs" style={{ marginTop: 12 }}>
+                  <div className="row-between"><span className="muted">Student coordinator</span><span className="strong">{s.coordinator_student_name || '—'}</span></div>
+                  <div className="row-between"><span className="muted">Faculty mentor</span><span className="strong">{s.coordinator_faculty_name || '—'}</span></div>
+                  <div className="row-between"><span className="muted">Members</span><span className="strong mono">{s.approved_member_count || 0}</span></div>
                 </div>
-              ))}
-            </div>
-          )}
+                <div className="row gap-6 wrap" style={{ marginTop: 12 }}>
+                  {isStudent && !s.is_coordinator && m?.status !== 'approved' && (
+                    <button className="btn btn-accent btn-sm" disabled={m?.status === 'pending'} onClick={() => setApply(s)}>{m?.status === 'pending' ? 'Application sent' : m?.status === 'rejected' ? 'Re-apply' : 'Apply to join'}</button>
+                  )}
+                  {isStudent && s.coordinator_student_id && !s.is_coordinator && <button className="btn btn-ghost btn-sm" onClick={() => setContact(s)}><MessageSquare size={13} /> Message</button>}
+                  {isAdmin && <button className="btn btn-ghost btn-sm" onClick={() => setEdit(s)}><Pencil size={13} /> Edit</button>}
+                </div>
+              </Card>
+            );
+          })}
         </div>
       )}
+      <ApplyModal s={apply} onClose={() => setApply(null)} onDone={() => { setApply(null); reload(); }} />
+      <ContactModal s={contact} onClose={() => setContact(null)} onDone={() => setContact(null)} onNavigate={onNavigate} />
+      {isAdmin && <EditModal s={edit} onClose={() => setEdit(null)} onDone={() => { setEdit(null); reload(); }} />}
+    </div>
+  );
+}
 
-      {/* TAB 3: COORDINATOR APPLICATION QUEUE */}
-      {activeTab === 'coordinator' && (isAdmin || coordinatedSocieties.length > 0) && (
-        <div className="glass-panel" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
-            <div>
-              <h3 style={{ fontSize: '1.15rem', fontWeight: 800 }}>Membership Application Queue</h3>
-              <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                Review incoming student applications and reply to applicant inquiries in the Forum.
-              </p>
-            </div>
+/* ---------------------------------------------------------------------- */
+function DutyQueue({ requests, reload }) {
+  const { user } = useAuth();
+  const call = useApi();
+  const toast = useToast();
+  const canDecide = user?.role === 'faculty' || user?.role === 'admin';
+  const [status, setStatus] = useState(canDecide ? 'pending' : 'all');
+  const [remarks, setRemarks] = useState({});
+  const [busy, setBusy] = useState(null);
+  const list = requests.filter((r) => status === 'all' || r.status === status).sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+  const count = (s) => requests.filter((r) => r.status === s).length;
 
-            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-              <select
-                className="form-select"
-                style={{ width: '260px' }}
-                value={coordSocietyId || ''}
-                onChange={(e) => setCoordSocietyId(Number(e.target.value))}
-              >
-                {(isAdmin ? societies : coordinatedSocieties).map(s => (
-                  <option key={s.id} value={s.id}>{s.name} ({s.pending_applications_count || 0} pending)</option>
-                ))}
-              </select>
-              {onNavigate && (
-                <button onClick={() => onNavigate('forum')} className="btn btn-outline btn-sm">
-                  <MessageSquare size={14} /> Open Society Messages
-                </button>
+  const decide = async (r, st) => {
+    setBusy(r.id);
+    try {
+      const d = await call(`/societies/attendance-requests/${r.id}/decide`, { method: 'PUT', body: { status: st, remarks: remarks[r.id] || '' } });
+      toast.success(d?.message || `Request ${st}`);
+      reload();
+    } catch (e) { toast.error(e.message); } finally { setBusy(null); }
+  };
+
+  return (
+    <div className="stack gap-16">
+      <Callout tone="info">Approved duty leave marks the student <b>Present</b> for that lecture, so it counts towards the 75% attendance rule.</Callout>
+      <Chips value={status} onChange={setStatus} options={[
+        { value: 'all', label: 'All', count: requests.length },
+        { value: 'pending', label: 'Pending', count: count('pending') },
+        { value: 'approved', label: 'Approved', count: count('approved') },
+        { value: 'rejected', label: 'Rejected', count: count('rejected') },
+      ]} />
+      {list.length === 0 ? <div className="card"><EmptyState icon={CalendarDays} title={status === 'pending' ? 'Queue is clear' : 'No requests'} description={status === 'pending' ? 'No duty-leave requests are waiting for review.' : undefined} /></div> : (
+        <div className="stack gap-12">
+          {list.map((r) => (
+            <Card key={r.id}>
+              <div className="row-between wrap" style={{ gap: 12, alignItems: 'flex-start' }}>
+                <div className="grow" style={{ minWidth: 260 }}>
+                  <div className="row gap-6 wrap">
+                    <Badge tone="accent">{r.society_name}</Badge>
+                    <Badge tone="outline">{r.subject_code} · {r.subject_name}</Badge>
+                  </div>
+                  <div className="strong" style={{ fontSize: 15.5, marginTop: 10 }}>{r.activity_title}</div>
+                  {r.reason && <p className="small ink-2" style={{ marginTop: 4 }}>{r.reason}</p>}
+                  <div className="row gap-12 wrap xs muted" style={{ marginTop: 10 }}>
+                    <span className="row gap-4"><GraduationCap size={12} /> {r.student_name} · <span className="mono">{r.roll_no}</span> · {r.section}</span>
+                    <span className="row gap-4"><CalendarDays size={12} /> {fmtDate(r.date)} {r.session_period && `· ${r.session_period}`}</span>
+                    <span className="row gap-4"><Users size={12} /> Routed to {r.assigned_faculty_name || 'subject faculty'}</span>
+                  </div>
+                </div>
+                <div style={{ textAlign: 'right' }}>
+                  <Badge tone={statusTone(r.status)} dot>{titleCase(r.status)}</Badge>
+                  <div className="xs faint" style={{ marginTop: 6 }}>{timeAgo(r.created_at)}</div>
+                </div>
+              </div>
+              {r.reviewer_remarks && <div className="tile-sm small" style={{ marginTop: 12 }}><span className="muted">{r.reviewed_by_faculty_name || 'Reviewer'}:</span> “{r.reviewer_remarks}”</div>}
+              {canDecide && r.status === 'pending' && (
+                <div className="row gap-8 wrap" style={{ marginTop: 14 }}>
+                  <input className="input input-sm grow" style={{ minWidth: 220 }} placeholder="Remarks (optional)" value={remarks[r.id] || ''} onChange={(e) => setRemarks((x) => ({ ...x, [r.id]: e.target.value }))} />
+                  <button className="btn btn-success-soft btn-sm" disabled={busy === r.id} onClick={() => decide(r, 'approved')}><CheckCircle2 size={14} /> Approve</button>
+                  <button className="btn btn-danger-soft btn-sm" disabled={busy === r.id} onClick={() => decide(r, 'rejected')}><XCircle size={14} /> Reject</button>
+                </div>
               )}
-            </div>
-          </div>
-
-          {coordApplications.length === 0 ? (
-            <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>
-              No applications received for this society yet.
-            </div>
-          ) : (
-            <div className="table-container">
-              <table className="erp-table">
-                <thead>
-                  <tr>
-                    <th>Student</th>
-                    <th>Roll / Section</th>
-                    <th>Application Note</th>
-                    <th>Status</th>
-                    <th>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {coordApplications.map(app => (
-                    <tr key={app.id}>
-                      <td>
-                        <div style={{ fontWeight: 700 }}>{app.student_name}</div>
-                        <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>{app.student_email}</div>
-                      </td>
-                      <td>{app.roll_no} • {app.section}</td>
-                      <td style={{ maxWidth: '340px', fontSize: '0.82rem' }}>{app.application_message}</td>
-                      <td>
-                        <span className={`badge badge-${app.status === 'approved' ? 'success' : app.status === 'rejected' ? 'danger' : 'warning'}`}>
-                          {app.status.toUpperCase()}
-                        </span>
-                      </td>
-                      <td>
-                        {app.status === 'pending' ? (
-                          <div style={{ display: 'flex', gap: '0.4rem' }}>
-                            <button onClick={() => handleDecideApplication(app.id, 'approved')} className="btn btn-success btn-sm">
-                              Approve
-                            </button>
-                            <button onClick={() => handleDecideApplication(app.id, 'rejected')} className="btn btn-danger btn-sm">
-                              Reject
-                            </button>
-                          </div>
-                        ) : (
-                          <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Decided</span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* APPLY MODAL */}
-      {applySociety && (
-        <div className="modal-overlay">
-          <div className="modal-content" style={{ maxWidth: '480px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-              <h3 style={{ fontSize: '1.2rem' }}>Apply to {applySociety.name}</h3>
-              <button onClick={() => setApplySociety(null)} className="btn btn-secondary btn-sm" style={{ padding: '0.3rem' }}>
-                <X size={16} />
-              </button>
-            </div>
-            <form onSubmit={handleApplySubmit}>
-              <div className="form-group">
-                <label className="form-label">Why do you want to join? (Short Message)</label>
-                <textarea
-                  className="form-textarea"
-                  value={applyMessage}
-                  onChange={(e) => setApplyMessage(e.target.value)}
-                  placeholder="Share your interest, skills, or relevant experience..."
-                  required
-                />
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', marginTop: '1rem' }}>
-                <button type="button" onClick={() => setApplySociety(null)} className="btn btn-secondary">Cancel</button>
-                <button type="submit" className="btn btn-primary">Submit Application</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* CONTACT COORDINATOR MODAL */}
-      {contactSociety && (
-        <div className="modal-overlay">
-          <div className="modal-content" style={{ maxWidth: '480px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-              <h3 style={{ fontSize: '1.2rem' }}>Message {contactSociety.name} Coordinator</h3>
-              <button onClick={() => setContactSociety(null)} className="btn btn-secondary btn-sm" style={{ padding: '0.3rem' }}>
-                <X size={16} />
-              </button>
-            </div>
-            <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>
-              Messages create or continue a private society-scoped thread in the Student-Teacher Forum with {contactSociety.coordinator_student_name || 'the coordinator'}.
-            </p>
-            <form onSubmit={handleContactSubmit}>
-              <div className="form-group">
-                <label className="form-label">Your Message</label>
-                <textarea
-                  className="form-textarea"
-                  value={contactMessage}
-                  onChange={(e) => setContactMessage(e.target.value)}
-                  placeholder="Ask about auditions, interviews, or society activities..."
-                  required
-                />
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', marginTop: '1rem' }}>
-                <button type="button" onClick={() => setContactSociety(null)} className="btn btn-secondary">Cancel</button>
-                <button type="submit" className="btn btn-primary">Send via Forum</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* REQUEST SOCIETY DUTY ATTENDANCE MODAL */}
-      {showDutyModal && (
-        <div className="modal-overlay">
-          <div className="modal-content" style={{ maxWidth: '520px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-              <h3 style={{ fontSize: '1.2rem' }}>Request Society Duty Attendance</h3>
-              <button onClick={() => setShowDutyModal(false)} className="btn btn-secondary btn-sm" style={{ padding: '0.3rem' }}>
-                <X size={16} />
-              </button>
-            </div>
-            <form onSubmit={handleDutySubmit}>
-              <div className="form-group">
-                <label className="form-label">Society *</label>
-                <select className="form-select" value={dutyForm.societyId} onChange={(e) => setDutyForm({ ...dutyForm, societyId: Number(e.target.value) })}>
-                  {societies.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-                </select>
-              </div>
-              <div className="form-group">
-                <label className="form-label">Class / Subject Missed *</label>
-                <select className="form-select" value={dutyForm.classSubjectId} onChange={(e) => setDutyForm({ ...dutyForm, classSubjectId: Number(e.target.value) })}>
-                  {subjects.map(sub => <option key={sub.id} value={sub.id}>{sub.code} - {sub.name}</option>)}
-                </select>
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
-                <div className="form-group">
-                  <label className="form-label">Date *</label>
-                  <input type="date" required className="form-input" value={dutyForm.date} onChange={(e) => setDutyForm({ ...dutyForm, date: e.target.value })} />
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Session / Period</label>
-                  <input type="text" className="form-input" placeholder="e.g. 10:00 - 11:00" value={dutyForm.sessionPeriod} onChange={(e) => setDutyForm({ ...dutyForm, sessionPeriod: e.target.value })} />
-                </div>
-              </div>
-              <div className="form-group">
-                <label className="form-label">Event / Society Activity *</label>
-                <input type="text" required className="form-input" placeholder="e.g. GDSC Cloud Study Jam" value={dutyForm.activityTitle} onChange={(e) => setDutyForm({ ...dutyForm, activityTitle: e.target.value })} />
-              </div>
-              <div className="form-group">
-                <label className="form-label">Duty Details / Reason</label>
-                <textarea className="form-textarea" placeholder="Explain your role or duty..." value={dutyForm.reason} onChange={(e) => setDutyForm({ ...dutyForm, reason: e.target.value })} />
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', marginTop: '1rem' }}>
-                <button type="button" onClick={() => setShowDutyModal(false)} className="btn btn-secondary">Cancel</button>
-                <button type="submit" className="btn btn-primary">Submit to Subject Faculty</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* ADMIN EDIT SOCIETY MODAL */}
-      {editSociety && (
-        <div className="modal-overlay">
-          <div className="modal-content" style={{ maxWidth: '520px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-              <h3 style={{ fontSize: '1.2rem' }}>Configure: {editSociety.name}</h3>
-              <button onClick={() => setEditSociety(null)} className="btn btn-secondary btn-sm" style={{ padding: '0.3rem' }}>
-                <X size={16} />
-              </button>
-            </div>
-            <form onSubmit={handleAdminSaveSociety}>
-              <div className="form-group">
-                <label className="form-label">Category</label>
-                <input type="text" className="form-input" value={editForm.category} onChange={(e) => setEditForm({ ...editForm, category: e.target.value })} />
-              </div>
-              <div className="form-group">
-                <label className="form-label">Description</label>
-                <textarea className="form-textarea" value={editForm.description} onChange={(e) => setEditForm({ ...editForm, description: e.target.value })} />
-              </div>
-              <div className="form-group">
-                <label className="form-label">Designated Student Coordinator</label>
-                <select className="form-select" value={editForm.coordinatorStudentId} onChange={(e) => setEditForm({ ...editForm, coordinatorStudentId: e.target.value })}>
-                  <option value="">-- Unassigned --</option>
-                  {studentsList.map(st => <option key={st.id} value={st.id}>{st.full_name} ({st.roll_no})</option>)}
-                </select>
-              </div>
-              <div className="form-group">
-                <label className="form-label">Faculty Mentor</label>
-                <select className="form-select" value={editForm.coordinatorFacultyId} onChange={(e) => setEditForm({ ...editForm, coordinatorFacultyId: e.target.value })}>
-                  <option value="">-- Unassigned --</option>
-                  {facultyList.map(f => <option key={f.id} value={f.id}>{f.full_name} ({f.employee_id})</option>)}
-                </select>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', marginTop: '1rem' }}>
-                <button type="button" onClick={() => setEditSociety(null)} className="btn btn-secondary">Cancel</button>
-                <button type="submit" className="btn btn-primary">Save Changes</button>
-              </div>
-            </form>
-          </div>
+            </Card>
+          ))}
         </div>
       )}
     </div>
   );
 }
 
+/* ---------------------------------------------------------------------- */
+function CoordinatorDesk({ societies, reload }) {
+  const call = useApi();
+  const toast = useToast();
+  const [sid, setSid] = useState(societies.find((s) => s.pending_applications_count)?.id || societies[0]?.id);
+  const [busy, setBusy] = useState(null);
+  const apps = useLoader((api) => (sid ? api(`/societies/${sid}/applications`) : Promise.resolve([])), [sid]);
+  const list = asList(apps.data).sort((a, b) => (a.status === 'pending' ? -1 : 1) - (b.status === 'pending' ? -1 : 1));
+
+  const decide = async (a, status) => {
+    setBusy(a.id);
+    try {
+      await call(`/societies/applications/${a.id}/decide`, { method: 'PUT', body: { status } });
+      toast.success(`${a.student_name} ${status}`);
+      apps.reload();
+      reload();
+    } catch (e) { toast.error(e.message); } finally { setBusy(null); }
+  };
+
+  return (
+    <Card flush title="Membership applications" icon={Inbox}
+      actions={<select className="select select-sm" style={{ width: 280 }} value={sid || ''} onChange={(e) => setSid(Number(e.target.value))}>
+        {societies.map((s) => <option key={s.id} value={s.id}>{s.name}{s.pending_applications_count ? ` (${s.pending_applications_count} pending)` : ''}</option>)}
+      </select>}>
+      {apps.loading ? <div style={{ padding: 16 }}><Skeleton h={120} /></div> : apps.error ? <div style={{ padding: 16 }}><ErrorState error={apps.error} onRetry={apps.hardReload} /></div> : list.length === 0 ? <EmptyState icon={Inbox} title="No applications" /> : (
+        <div className="list">
+          {list.map((a) => (
+            <div key={a.id} className="list-item" style={{ alignItems: 'flex-start' }}>
+              <Avatar src={a.avatar_url} name={a.student_name} size={36} />
+              <div className="grow">
+                <div className="list-title">{a.student_name} <span className="mono xs muted">{a.roll_no} · {a.section}</span></div>
+                <div className="small ink-2" style={{ marginTop: 2 }}>{a.application_message}</div>
+                <div className="xs faint" style={{ marginTop: 4 }}>Applied {timeAgo(a.applied_at)}</div>
+              </div>
+              {a.status === 'pending' ? (
+                <div className="row gap-6">
+                  <button className="btn btn-success-soft btn-sm" disabled={busy === a.id} onClick={() => decide(a, 'approved')}><CheckCircle2 size={14} /> Accept</button>
+                  <button className="btn btn-danger-soft btn-sm" disabled={busy === a.id} onClick={() => decide(a, 'rejected')}><XCircle size={14} /></button>
+                </div>
+              ) : <Badge tone={statusTone(a.status)} dot>{titleCase(a.status)}</Badge>}
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+/* ---------------------------------------------------------------------- */
+function ApplyModal({ s, onClose, onDone }) {
+  const call = useApi();
+  const toast = useToast();
+  const [msg, setMsg] = useState('');
+  const [busy, setBusy] = useState(false);
+  const submit = async () => {
+    setBusy(true);
+    try {
+      const r = await call(`/societies/${s.id}/apply`, { method: 'POST', body: { applicationMessage: msg } });
+      toast.success(r?.message || 'Application sent');
+      setMsg('');
+      onDone();
+    } catch (e) { toast.error(e.message); } finally { setBusy(false); }
+  };
+  return (
+    <Modal open={!!s} onClose={onClose} title={`Join ${s?.name || ''}`} subtitle="The student coordinator reviews every application." icon={Flag} size="sm"
+      footer={<><button className="btn btn-ghost" onClick={onClose}>Cancel</button><button className="btn btn-accent" onClick={submit} disabled={busy || !msg.trim()}><Send size={14} /> {busy ? 'Sending…' : 'Send application'}</button></>}>
+      <Field label="Why do you want to join?"><textarea className="textarea" value={msg} onChange={(e) => setMsg(e.target.value)} placeholder="Skills, past projects or events you’d like to contribute to" autoFocus /></Field>
+    </Modal>
+  );
+}
+
+function ContactModal({ s, onClose, onDone, onNavigate }) {
+  const call = useApi();
+  const toast = useToast();
+  const [msg, setMsg] = useState('');
+  const [busy, setBusy] = useState(false);
+  const submit = async () => {
+    setBusy(true);
+    try {
+      await call(`/societies/${s.id}/contact`, { method: 'POST', body: { message: msg } });
+      toast.success(`Message sent to ${s.coordinator_student_name} — continue the thread in the forum`);
+      setMsg('');
+      onDone();
+      onNavigate?.('forum');
+    } catch (e) { toast.error(e.message); } finally { setBusy(false); }
+  };
+  return (
+    <Modal open={!!s} onClose={onClose} title={`Message ${s?.coordinator_student_name || 'coordinator'}`} subtitle={`${s?.name} · opens a forum thread`} icon={MessageSquare} size="sm"
+      footer={<><button className="btn btn-ghost" onClick={onClose}>Cancel</button><button className="btn btn-accent" onClick={submit} disabled={busy || !msg.trim()}><Send size={14} /> {busy ? 'Sending…' : 'Send'}</button></>}>
+      <Field label="Message"><textarea className="textarea" value={msg} onChange={(e) => setMsg(e.target.value)} autoFocus /></Field>
+    </Modal>
+  );
+}
+
+function DutyModal({ open, onClose, societies, onDone }) {
+  const { studentProfile } = useAuth();
+  const call = useApi();
+  const toast = useToast();
+  const subs = useLoader((api) => (open ? api(`/academics/subjects?semester=${studentProfile?.semester || 4}`) : Promise.resolve([])), [open]);
+  const subjects = asList(subs.data).filter((s) => !studentProfile?.course_id || s.course_id === studentProfile.course_id);
+  const member = societies.filter((s) => s.my_membership?.status === 'approved' || s.is_coordinator);
+  const choices = member.length ? member : societies;
+  const [f, setF] = useState({ societyId: '', classSubjectId: '', date: new Date().toISOString().slice(0, 10), sessionPeriod: '10:00 - 11:00', activityTitle: '', reason: '' });
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    setF((x) => ({ ...x, societyId: x.societyId || choices[0]?.id || '', classSubjectId: x.classSubjectId || subjects[0]?.id || '' }));
+  }, [choices.length, subjects.length]); // eslint-disable-line react-hooks/exhaustive-deps
+  const set = (k) => (e) => setF((x) => ({ ...x, [k]: e.target.value }));
+  const submit = async (e) => {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      const r = await call('/societies/attendance-requests', { method: 'POST', body: { ...f, societyId: Number(f.societyId), classSubjectId: Number(f.classSubjectId) } });
+      toast.success(r?.message || 'Request sent to the subject faculty');
+      setF((x) => ({ ...x, activityTitle: '', reason: '' }));
+      onDone();
+    } catch (err) { toast.error(err.message); } finally { setBusy(false); }
+  };
+  return (
+    <Modal open={open} onClose={onClose} title="Request duty leave" subtitle="Routed automatically to the faculty who teaches the missed lecture." icon={CalendarDays} size="lg"
+      footer={<><button className="btn btn-ghost" onClick={onClose}>Cancel</button><button className="btn btn-accent" type="submit" form="duty-form" disabled={busy}>{busy ? 'Submitting…' : 'Submit request'}</button></>}>
+      {member.length === 0 && <Callout tone="warning" style={{ marginBottom: 14 }}>You aren’t an approved member of any society yet — the request may be rejected.</Callout>}
+      <form id="duty-form" className="form-grid" onSubmit={submit}>
+        <Field label="Society"><select className="select" value={f.societyId} onChange={set('societyId')}>{choices.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select></Field>
+        <Field label="Missed lecture"><select className="select" value={f.classSubjectId} onChange={set('classSubjectId')}>{subjects.map((s) => <option key={s.id} value={s.id}>{s.code} · {s.name}</option>)}</select></Field>
+        <Field label="Date"><input className="input" type="date" required value={f.date} onChange={set('date')} /></Field>
+        <Field label="Period"><select className="select" value={f.sessionPeriod} onChange={set('sessionPeriod')}>{['09:00 - 10:00', '10:00 - 11:00', '11:00 - 12:00', '12:00 - 13:00', '14:00 - 15:00', '15:00 - 16:00', '16:00 - 17:00'].map((p) => <option key={p}>{p}</option>)}</select></Field>
+        <Field label="Activity" className="full"><input className="input" required value={f.activityTitle} onChange={set('activityTitle')} placeholder="e.g. Smart India Hackathon internal round" /></Field>
+        <Field label="Details" className="full"><textarea className="textarea" value={f.reason} onChange={set('reason')} placeholder="What you were doing and who can verify it" /></Field>
+      </form>
+    </Modal>
+  );
+}
+
+function EditModal({ s, onClose, onDone }) {
+  const call = useApi();
+  const toast = useToast();
+  const [f, setF] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const people = useLoader((api) => (s ? Promise.all([settle(api('/students?semester=4'), []), settle(api('/faculty'), [])]) : Promise.resolve([[], []])), [!!s]);
+  useEffect(() => { if (s) setF({ description: s.description || '', category: s.category || 'General', coordinatorStudentId: s.coordinator_student_id || '', coordinatorFacultyId: s.coordinator_faculty_id || '' }); }, [s]);
+  const set = (k) => (e) => setF((x) => ({ ...x, [k]: e.target.value }));
+  const submit = async (e) => {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      await call(`/societies/${s.id}`, { method: 'PUT', body: { ...f, coordinatorStudentId: f.coordinatorStudentId ? Number(f.coordinatorStudentId) : null, coordinatorFacultyId: f.coordinatorFacultyId ? Number(f.coordinatorFacultyId) : null } });
+      toast.success(`${s.name} updated`);
+      onDone();
+    } catch (err) { toast.error(err.message); } finally { setBusy(false); }
+  };
+  const [students, faculty] = people.data || [[], []];
+  return (
+    <Modal open={!!s} onClose={onClose} title={`Edit ${s?.name || ''}`} icon={Pencil} size="lg"
+      footer={<><button className="btn btn-ghost" onClick={onClose}>Cancel</button><button className="btn btn-accent" type="submit" form="soc-form" disabled={busy}>{busy ? 'Saving…' : 'Save'}</button></>}>
+      {f && (
+        <form id="soc-form" className="form-grid" onSubmit={submit}>
+          <Field label="Category"><select className="select" value={f.category} onChange={set('category')}>{Object.keys(CAT_HUE).map((c) => <option key={c}>{c}</option>)}</select></Field>
+          <div />
+          <Field label="Student coordinator"><select className="select" value={f.coordinatorStudentId} onChange={set('coordinatorStudentId')} disabled={people.loading}><option value="">Unassigned</option>{asList(students).map((x) => <option key={x.id} value={x.id}>{x.full_name} · {x.roll_no}</option>)}</select></Field>
+          <Field label="Faculty mentor"><select className="select" value={f.coordinatorFacultyId} onChange={set('coordinatorFacultyId')} disabled={people.loading}><option value="">Unassigned</option>{asList(faculty).map((x) => <option key={x.id} value={x.id}>{x.full_name}</option>)}</select></Field>
+          <Field label="Description" className="full"><textarea className="textarea" value={f.description} onChange={set('description')} /></Field>
+        </form>
+      )}
+    </Modal>
+  );
+}

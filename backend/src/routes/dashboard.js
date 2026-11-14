@@ -26,6 +26,12 @@ const {
   Notification
 } = require('../db/database');
 const { verifyToken } = require('../middleware/authMiddleware');
+const { getPolicy } = require('../services/policy');
+const { subjectsForStudent } = require('../services/scope');
+const { predictStudent } = require('../services/predictions');
+const { ensureMeritFresh } = require('../services/merit');
+const { refreshFees } = require('../services/feeLedger');
+const { localDate } = require('../services/time');
 
 const router = express.Router();
 
@@ -33,6 +39,8 @@ const router = express.Router();
 router.get('/summary', verifyToken, async (req, res) => {
   try {
     const role = req.user.role;
+    const policy = await getPolicy();
+    const thr = policy.attendanceThreshold;
 
     if (role === 'admin') {
       const [
@@ -67,7 +75,7 @@ router.get('/summary', verifyToken, async (req, res) => {
               _id: null,
               total: { $sum: 1 },
               present: {
-                $sum: { $cond: [{ $eq: ['$status', 'Present'] }, 1, 0] }
+                $sum: { $cond: [{ $eq: ['$status', 'Present'] }, 1, { $cond: [{ $eq: ['$status', 'Late'] }, 0.5, 0] }] }
               }
             }
           }
@@ -78,7 +86,7 @@ router.get('/summary', verifyToken, async (req, res) => {
               _id: '$student_id',
               total: { $sum: 1 },
               present: {
-                $sum: { $cond: [{ $eq: ['$status', 'Present'] }, 1, 0] }
+                $sum: { $cond: [{ $eq: ['$status', 'Present'] }, 1, { $cond: [{ $eq: ['$status', 'Late'] }, 0.5, 0] }] }
               }
             }
           },
@@ -93,20 +101,20 @@ router.get('/summary', verifyToken, async (req, res) => {
               }
             }
           },
-          { $match: { pct: { $lt: 0.75 } } },
+          { $match: { pct: { $lt: thr / 100 } } },
           { $count: 'count' }
         ]),
         AuditLog.find({}).sort({ created_at: -1 }).limit(5).lean(),
         InstitutionSetting.findOne({ setting_key: 'attendance_threshold' }).lean(),
         Notice.find({}).sort({ is_pinned: -1, created_at: -1 }).limit(4).lean(),
-        Examination.find({}).sort({ start_date: 1 }).limit(3).lean()
+        Examination.find({ status: { $ne: 'Results_Declared' } }).sort({ start_date: 1 }).limit(3).lean()
       ]);
 
       const fees = feeAgg[0] || { total_demand: 0, total_collected: 0 };
       const att = attAgg[0] || { total: 0, present: 0 };
-      const overallAttPct = att.total > 0 ? Number(((att.present / att.total) * 100).toFixed(1)) : 88.0;
+      const overallAttPct = att.total > 0 ? Number(((att.present / att.total) * 100).toFixed(1)) : null;
       const atRiskCount = atRiskAgg[0]?.count || 0;
-      const threshold = thresholdSetting ? parseFloat(thresholdSetting.setting_value) : 75.0;
+      const threshold = thresholdSetting ? parseFloat(thresholdSetting.setting_value) : thr;
       const thresholdRatio = threshold / 100;
 
       const atRiskRows = await AttendanceRecord.aggregate([
@@ -186,19 +194,19 @@ router.get('/summary', verifyToken, async (req, res) => {
     }
 
     if (role === 'faculty') {
-      const fac =
-        req.faculty ||
-        (await Faculty.findOne({ user_id: req.user.id }).lean()) || { id: 1 };
+      const fac = req.faculty || (await Faculty.findOne({ user_id: req.user.id }).lean());
+      if (!fac) return res.status(404).json({ error: 'Faculty profile not found' });
 
       const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
       const currentDay = days[new Date().getDay()] || 'Monday';
-      const effectiveDay = currentDay === 'Sunday' || currentDay === 'Saturday' ? 'Monday' : currentDay;
+      const isWeekend = currentDay === 'Sunday' || currentDay === 'Saturday';
+      const effectiveDay = isWeekend ? 'Monday' : currentDay;
 
       const [maps, todaySlotDocs, facAssignments, recentNotices] = await Promise.all([
         FacultyClassMap.find({ faculty_id: fac.id }).lean(),
         TimetableSlot.find({ faculty_id: fac.id, day_of_week: effectiveDay }).sort({ start_time: 1 }).lean(),
         Assignment.find({ faculty_id: fac.id }).lean(),
-        Notice.find({}).sort({ is_pinned: -1, created_at: -1 }).limit(3).lean()
+        Notice.find({ target_audience: { $in: ['All', 'Faculty'] } }).sort({ is_pinned: -1, created_at: -1 }).limit(3).lean()
       ]);
 
       const mappedSubjectIds = maps.map(m => m.subject_id);
@@ -250,9 +258,10 @@ router.get('/summary', verifyToken, async (req, res) => {
           if (!byStu[r.student_id]) byStu[r.student_id] = { total: 0, present: 0 };
           byStu[r.student_id].total += 1;
           if (r.status === 'Present') byStu[r.student_id].present += 1;
+          else if (r.status === 'Late') byStu[r.student_id].present += 0.5;
         }
         const riskIds = Object.entries(byStu)
-          .filter(([, v]) => v.total > 0 && v.present / v.total < 0.75)
+          .filter(([, v]) => v.total > 0 && v.present / v.total < thr / 100)
           .map(([id]) => Number(id));
 
         if (riskIds.length > 0) {
@@ -292,68 +301,58 @@ router.get('/summary', verifyToken, async (req, res) => {
         },
         assigned_classes: mappedClasses,
         today_schedule: todaySlots,
+        schedule_day: effectiveDay,
+        schedule_is_today: !isWeekend,
         at_risk_students: formattedAtRisk,
         recent_notices: recentNotices
       });
     }
 
     if (role === 'student') {
-      const st =
-        req.student ||
-        (await Student.findOne({ user_id: req.user.id }).lean()) || {
-          id: 1,
-          current_cgpa: 8.78,
-          semester: 4
-        };
+      const st = req.student ? await Student.findOne({ id: req.student.id }).lean() : null;
+      if (!st) return res.status(404).json({ error: 'Student record not found' });
+      await Promise.all([refreshFees({ student_id: st.id }), ensureMeritFresh()]);
 
-      const [attRecords, pointsDoc, feePayment, semSubjects, recentNotices] = await Promise.all([
-        AttendanceRecord.find({ student_id: st.id }).lean(),
+      const [attRecords, pointsDoc, feePayment, semSubjects, recentNotices, prediction] = await Promise.all([
+        AttendanceRecord.find({ student_id: st.id }, 'status').lean(),
         StudentPoints.findOne({ student_id: st.id }).lean(),
         StudentFeePayment.findOne({ student_id: st.id }).sort({ id: -1 }).lean(),
-        Subject.find({ semester: st.semester || 4 }).lean(),
-        Notice.find({}).sort({ is_pinned: -1, created_at: -1 }).limit(4).lean()
+        subjectsForStudent(st),
+        Notice.find({ target_audience: { $in: ['All', 'Students'] } }).sort({ is_pinned: -1, created_at: -1 }).limit(4).lean(),
+        predictStudent(st).catch(() => null)
       ]);
 
       const total = attRecords.length;
-      const present = attRecords.filter(r => r.status === 'Present').length;
-      const late = attRecords.filter(r => r.status === 'Late').length;
-      const attended = present + late * 0.5;
-      const attPct = total > 0 ? Number(((attended / total) * 100).toFixed(1)) : 90.0;
-
-      const points = pointsDoc || { total_merit_points: 920, merit_rank: 2, badges_json: '[]' };
+      const attended = attRecords.filter((r) => r.status === 'Present').length + attRecords.filter((r) => r.status === 'Late').length * 0.5;
+      const attPct = total > 0 ? Number(((attended / total) * 100).toFixed(1)) : 100;
       let badges = [];
-      try {
-        badges = JSON.parse(points.badges_json);
-      } catch (e) {}
+      try { badges = JSON.parse(pointsDoc?.badges_json || '[]'); } catch { badges = []; }
 
-      const semSubMap = Object.fromEntries(semSubjects.map(s => [s.id, s]));
-      const assignmentDocs = await Assignment.find({ subject_id: { $in: semSubjects.map(s => s.id) } })
-        .sort({ due_date: 1 })
-        .limit(3)
-        .lean();
-      const assignments = assignmentDocs.map(a => ({
-        ...a,
-        subject_code: semSubMap[a.subject_id]?.code || '',
-        subject_name: semSubMap[a.subject_id]?.name || ''
-      }));
+      const semSubMap = Object.fromEntries(semSubjects.map((s) => [s.id, s]));
+      const open = await Assignment.find({ subject_id: { $in: semSubjects.map((s) => s.id) }, due_date: { $gte: localDate() } }).sort({ due_date: 1 }).limit(12).lean();
+      const done = new Set(await AssignmentSubmission.distinct('assignment_id', { student_id: st.id, assignment_id: { $in: open.map((a) => a.id) } }));
+      const assignments = open
+        .filter((a) => !done.has(a.id))
+        .slice(0, 5)
+        .map((a) => ({ ...a, subject_code: semSubMap[a.subject_id]?.code || '', subject_name: semSubMap[a.subject_id]?.name || '' }));
 
       return res.json({
         role: 'student',
         student_profile: st,
         stats: {
           current_cgpa: st.current_cgpa,
-          predicted_cgpa_range: [
-            Number((st.current_cgpa - 0.15).toFixed(2)),
-            Number((st.current_cgpa + 0.18).toFixed(2))
-          ],
-          predicted_sgpa: 8.94,
-          confidence_score: 88,
+          predicted_cgpa_range: prediction ? prediction.cgpa_range : null,
+          predicted_sgpa: prediction ? prediction.predicted_sgpa : null,
+          predicted_sgpa_range: prediction ? prediction.sgpa_range : null,
+          confidence_score: prediction ? prediction.confidence_score : null,
+          at_risk_subject_count: prediction ? prediction.at_risk_count : 0,
           live_attendance: attPct,
-          is_attendance_critical: attPct < 75.0,
-          merit_points: points.total_merit_points,
-          merit_rank: points.merit_rank,
+          attendance_threshold: thr,
+          is_attendance_critical: total > 0 && attPct < thr,
+          merit_points: pointsDoc?.total_merit_points ?? 0,
+          merit_rank: pointsDoc?.merit_rank ?? null,
           badges,
-          fee_status: feePayment ? feePayment.status : 'Paid'
+          fee_status: feePayment ? feePayment.status : 'No invoice'
         },
         upcoming_assignments: assignments,
         recent_notices: recentNotices
@@ -407,22 +406,15 @@ router.get('/summary', verifyToken, async (req, res) => {
       } else if (linkedWards.length > 0) {
         activeWard = linkedWards.find(w => w.is_primary === 1) || linkedWards[0];
       } else {
-        activeWard = {
-          student_id: 1,
-          student_name: 'Tejassveer Singh Vasant',
-          roll_no: '071/CSE2/2023',
-          enrollment_no: '07113202723',
-          course_name: 'B.Tech CSE',
-          semester: 4,
-          section: 'CSE-2',
-          current_cgpa: 8.78
-        };
+        return res.json({ role: 'parent', linked_wards: [], active_ward: null, stats: {}, ward_society_attendance: [], recent_marks: [], recent_notices: [] });
       }
 
+      await refreshFees({ student_id: activeWard.student_id });
+      const declaredExams = await Examination.find({ status: 'Results_Declared' }).sort({ end_date: -1 }).lean();
       const [attRecords, feePaymentDoc, markDocs, recentNotices, sarDocs, societies, subjects] = await Promise.all([
         AttendanceRecord.find({ student_id: activeWard.student_id }).lean(),
         StudentFeePayment.findOne({ student_id: activeWard.student_id }).sort({ id: -1 }).lean(),
-        ExamMark.find({ student_id: activeWard.student_id }).limit(4).lean(),
+        ExamMark.find({ student_id: activeWard.student_id, exam_id: { $in: declaredExams.map((e) => e.id) } }).lean(),
         Notice.find({ target_audience: { $in: ['All', 'Parents'] } })
           .sort({ is_pinned: -1, created_at: -1 })
           .limit(3)
@@ -443,7 +435,7 @@ router.get('/summary', verifyToken, async (req, res) => {
         r => r.status === 'Present' && r.credit_type === 'Society'
       ).length;
       const attended = present + late * 0.5;
-      const attPct = total > 0 ? Number(((attended / total) * 100).toFixed(1)) : 88.0;
+      const attPct = total > 0 ? Number(((attended / total) * 100).toFixed(1)) : 100;
 
       let feePayment = null;
       if (feePaymentDoc) {
@@ -458,7 +450,10 @@ router.get('/summary', verifyToken, async (req, res) => {
       const subMap = Object.fromEntries(subjects.map(s => [s.id, s]));
       const socMap = Object.fromEntries(societies.map(s => [s.id, s]));
 
-      const recentMarks = markDocs.map(em => ({
+      const latestExamId = declaredExams.find((e) => markDocs.some((m) => m.exam_id === e.id))?.id;
+      const latestExam = declaredExams.find((e) => e.id === latestExamId);
+      const recentMarks = markDocs.filter((m) => m.exam_id === latestExamId).map(em => ({
+        exam_name: latestExam?.name,
         ...em,
         subject_code: subMap[em.subject_id]?.code || '',
         subject_name: subMap[em.subject_id]?.name || ''
@@ -477,13 +472,15 @@ router.get('/summary', verifyToken, async (req, res) => {
         active_ward: activeWard,
         stats: {
           live_attendance: attPct,
-          is_attendance_risk: attPct < 75.0,
+          is_attendance_risk: total > 0 && attPct < thr,
+          attendance_threshold: thr,
           total_classes: total,
           classes_attended: attended,
           classes_absent: absent,
           society_credited_classes: wardSocietyCreditedCount,
           fee_status: feePayment ? feePayment.status : 'Paid',
-          fee_due_amount: feePayment ? feePayment.amount_due : 0,
+          fee_due_amount: feePayment ? Math.max(0, feePayment.amount_due + (feePayment.fine_amount || 0) - (feePayment.amount_paid || 0)) : 0,
+          fee_fine: feePayment ? feePayment.fine_amount || 0 : 0,
           fee_payment_id: feePayment ? feePayment.id : null,
           fee_due_date: feePayment ? feePayment.due_date : null
         },

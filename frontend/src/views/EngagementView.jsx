@@ -1,437 +1,251 @@
-import React, { useState, useEffect } from 'react';
+import React, { useMemo, useState } from 'react';
+import { Trophy, BookOpenCheck, Compass, Crown, Medal, Plus, Sparkles, Target, Award, TrendingUp, ChevronLeft, ChevronRight, Cpu } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { useApi, asList } from '../lib/api';
+import { useLoader, settle } from '../lib/hooks';
+import { num } from '../lib/format';
 import {
-  Trophy,
-  Sparkles,
-  BookOpen,
-  Target,
-  CheckCircle2,
-  TrendingUp,
-  Brain,
-  Compass,
-  Award,
-  Clock,
-  Plus
-} from 'lucide-react';
+  PageHeader, Card, Badge, Progress, Avatar, Ring, Tabs, EmptyState, ErrorState, PageSkeleton, SearchInput, Stat, Skeleton, useToast, cx,
+} from '../components/ui';
 
 export default function EngagementView() {
-  const { user, token } = useAuth();
-  const [activeTab, setActiveTab] = useState('leaderboard'); // 'leaderboard', 'study-plan', 'career'
-  const [leaderboard, setLeaderboard] = useState([]);
-  const [studyPlan, setStudyPlan] = useState(null);
-  const [careerRecs, setCareerRecs] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const { user } = useAuth();
+  const personal = user?.role === 'student' || user?.role === 'parent';
+  const [tab, setTab] = useState('leaderboard');
+  return (
+    <>
+      <PageHeader eyebrow="Engagement" title={<>Merit & <em>guide</em></>}
+        description="A campus-wide merit leaderboard built from academics, attendance and coursework — plus a personal study planner and career guidance." />
+      <Tabs value={tab} onChange={setTab} tabs={[
+        { id: 'leaderboard', label: 'Leaderboard', icon: Trophy },
+        personal && { id: 'planner', label: 'Study planner', icon: BookOpenCheck },
+        personal && { id: 'career', label: 'Career guide', icon: Compass },
+      ]} />
+      {tab === 'leaderboard' && <Leaderboard />}
+      {tab === 'planner' && personal && <Planner />}
+      {tab === 'career' && personal && <Career />}
+    </>
+  );
+}
 
-  // Log study progress state
-  const [loggingSubjectId, setLoggingSubjectId] = useState(null);
-  const [loggedHours, setLoggedHours] = useState(1);
+/* ---------------------------------------------------------------------- */
+const PER = 20;
+function Leaderboard() {
+  const { studentProfile } = useAuth();
+  const [q, setQ] = useState('');
+  const [page, setPage] = useState(0);
+  const { data, loading, error, hardReload } = useLoader((api) => api('/engagement/leaderboard'));
+  const rows = asList(data);
+  const me = rows.find((r) => r.student_id === studentProfile?.id);
+  const filtered = useMemo(() => rows.filter((r) => !q || `${r.student_name} ${r.roll_no}`.toLowerCase().includes(q.toLowerCase())), [rows, q]);
+  if (loading) return <PageSkeleton />;
+  if (error) return <ErrorState error={error} onRetry={hardReload} />;
+  const top = rows.slice(0, 3);
+  const pages = Math.max(1, Math.ceil(filtered.length / PER));
+  const cur = Math.min(page, pages - 1);
+  const maxPts = rows[0]?.total_merit_points || 1;
 
-  useEffect(() => {
-    fetchData();
-  }, [token]);
+  return (
+    <div className="stack gap-16">
+      {top.length === 3 && (
+        <section className="hero rise" style={{ paddingBottom: 0 }}>
+          <div className="eyebrow" style={{ textAlign: 'center' }}>This semester’s top scholars</div>
+          <div className="row" style={{ justifyContent: 'center', alignItems: 'flex-end', gap: 'clamp(12px, 4vw, 40px)', marginTop: 22 }}>
+            {[top[1], top[0], top[2]].map((r, i) => {
+              const place = [2, 1, 3][i];
+              const h = [120, 160, 96][i];
+              const col = place === 1 ? 'var(--saffron)' : place === 2 ? '#d4d4d8' : '#d6a07a';
+              return (
+                <div key={r.student_id} className="stack gap-8" style={{ alignItems: 'center', width: 'clamp(96px, 22vw, 180px)' }}>
+                  {place === 1 && <Crown size={22} color="var(--saffron)" />}
+                  <div style={{ borderRadius: 99, padding: 3, background: col }}><Avatar src={r.avatar_url} name={r.student_name} size={place === 1 ? 72 : 58} /></div>
+                  <div style={{ textAlign: 'center' }}>
+                    <div className="strong" style={{ color: '#fff', fontSize: 14 }}>{r.student_name}</div>
+                    <div className="xs mono" style={{ color: 'var(--panel-muted)' }}>{r.roll_no}</div>
+                  </div>
+                  <div style={{ width: '100%', height: h, background: `linear-gradient(180deg, ${col}33, ${col}0d)`, borderTop: `2px solid ${col}`, display: 'grid', placeItems: 'center' }}>
+                    <div style={{ textAlign: 'center' }}>
+                      <div className="serif num" style={{ fontSize: 34, color: '#fff', lineHeight: 1 }}>{place}</div>
+                      <div className="xs mono" style={{ color: '#d4d4d8' }}>{r.total_merit_points} XP</div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
 
-  async function fetchData() {
-    if (!token) return;
-    setLoading(true);
+      {me && (
+        <div className="grid-4">
+          <Stat label="Your rank" value={`#${me.rank}`} unit={`of ${num(rows.length)}`} icon={Medal} tone="accent" hint={`Top ${Math.max(1, Math.round((me.rank / rows.length) * 100))}% of campus`} />
+          <Stat label="Merit points" value={me.total_merit_points} unit="XP" icon={Sparkles} tone="warning" hint={`${maxPts - me.total_merit_points} XP behind #1`} />
+          <Stat label="Academic score" value={me.academic_score} icon={Award} tone="violet" />
+          <Stat label="Attendance + coursework" value={me.attendance_score + me.assignment_score} icon={Target} tone="success" />
+        </div>
+      )}
 
+      <Card flush title="Campus leaderboard" subtitle="Academic + attendance + assignment points" icon={Trophy}
+        actions={<SearchInput value={q} onChange={(v) => { setQ(v); setPage(0); }} placeholder="Find a student" size="sm" style={{ width: 240 }} />}>
+        <div className="table-wrap">
+          <table className="tbl">
+            <thead><tr><th style={{ width: 70 }}>Rank</th><th>Student</th><th className="right">CGPA</th><th style={{ width: 260 }}>Point mix</th><th className="right">XP</th><th>Badges</th></tr></thead>
+            <tbody>
+              {filtered.slice(cur * PER, cur * PER + PER).map((r) => {
+                const isMe = r.student_id === studentProfile?.id;
+                const t = r.total_merit_points || 1;
+                return (
+                  <tr key={r.student_id} className={cx(isMe && 'selected')}>
+                    <td><span className={cx('mono strong', r.rank <= 3 && 'accent')}>#{r.rank}</span></td>
+                    <td>
+                      <div className="row gap-10">
+                        <Avatar src={r.avatar_url} name={r.student_name} size={30} />
+                        <div><div className="strong">{r.student_name} {isMe && <Badge tone="accent">You</Badge>}</div><div className="xs muted mono">{r.roll_no}</div></div>
+                      </div>
+                    </td>
+                    <td className="right mono">{r.current_cgpa}</td>
+                    <td>
+                      <div style={{ display: 'flex', height: 8, overflow: 'hidden', gap: 2, width: `${(t / maxPts) * 100}%`, minWidth: 40 }} title={`Academic ${r.academic_score} · Attendance ${r.attendance_score} · Assignments ${r.assignment_score}`}>
+                        <span style={{ flex: r.academic_score, background: 'var(--violet)' }} />
+                        <span style={{ flex: r.attendance_score, background: 'var(--success)' }} />
+                        <span style={{ flex: r.assignment_score, background: 'var(--saffron)' }} />
+                      </div>
+                    </td>
+                    <td className="right mono strong">{r.total_merit_points}</td>
+                    <td><div className="row wrap gap-4">{(r.badges || []).slice(0, 2).map((b) => <Badge key={b} tone="saffron">{b}</Badge>)}</div></td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        <div className="row-between wrap" style={{ padding: '10px 16px', borderTop: '1px solid var(--line)', gap: 10 }}>
+          <div className="row gap-12 xs muted">
+            <span className="row gap-4"><span className="dot" style={{ background: 'var(--violet)' }} />Academic</span>
+            <span className="row gap-4"><span className="dot" style={{ background: 'var(--success)' }} />Attendance</span>
+            <span className="row gap-4"><span className="dot" style={{ background: 'var(--saffron)' }} />Assignments</span>
+          </div>
+          <div className="row gap-6">
+            {me && <button className="btn btn-quiet btn-sm" onClick={() => { setQ(''); setPage(Math.floor((me.rank - 1) / PER)); }}>Jump to me</button>}
+            <button className="btn btn-ghost btn-sm btn-icon" disabled={cur === 0} onClick={() => setPage(cur - 1)} aria-label="Previous"><ChevronLeft size={15} /></button>
+            <span className="mono xs muted">{cur + 1} / {pages}</span>
+            <button className="btn btn-ghost btn-sm btn-icon" disabled={cur >= pages - 1} onClick={() => setPage(cur + 1)} aria-label="Next"><ChevronRight size={15} /></button>
+          </div>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------------- */
+function Planner() {
+  const { user } = useAuth();
+  const call = useApi();
+  const toast = useToast();
+  const isStudent = user?.role === 'student';
+  const [busy, setBusy] = useState(null);
+  const { data, loading, error, hardReload, setData } = useLoader((api) => api('/engagement/study-plan/me'));
+  if (loading) return <PageSkeleton stats={3} />;
+  if (error) return <ErrorState error={error} onRetry={hardReload} />;
+  const items = [...(data?.planner_items || [])].sort((a, b) => ({ High: 0, Medium: 1, Low: 2 }[a.priority] ?? 3) - ({ High: 0, Medium: 1, Low: 2 }[b.priority] ?? 3));
+  const done = items.reduce((a, i) => a + (i.completed_hours_this_week || 0), 0);
+  const target = data?.weekly_target_total_hours || items.reduce((a, i) => a + i.recommended_weekly_hours, 0);
+
+  const log = async (it, h) => {
+    setBusy(it.subject_id);
     try {
-      const [lbRes, spRes, crRes] = await Promise.all([
-        fetch('/api/engagement/leaderboard', { headers: { 'Authorization': `Bearer ${token}` } }),
-        fetch('/api/engagement/study-plan/me', { headers: { 'Authorization': `Bearer ${token}` } }),
-        fetch('/api/engagement/career-recommendations/me', { headers: { 'Authorization': `Bearer ${token}` } })
-      ]);
-
-      if (lbRes.ok) setLeaderboard(await lbRes.json());
-      if (spRes.ok) setStudyPlan(await spRes.json());
-      if (crRes.ok) setCareerRecs(await crRes.json());
-    } catch (err) {
-      console.error('Error fetching engagement metrics:', err);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  const handleLogStudyTime = async (subjectId) => {
-    try {
-      const res = await fetch('/api/engagement/study-plan/progress', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          subjectId,
-          addHours: loggedHours
-        })
-      });
-
-      if (res.ok) {
-        alert(`Successfully logged ${loggedHours} hours of revision!`);
-        setLoggingSubjectId(null);
-        fetchData();
-      }
-    } catch (err) {
-      alert('Error: ' + err.message);
-    }
+      await call('/engagement/study-plan/progress', { method: 'POST', body: { subjectId: it.subject_id, addHours: h } });
+      setData((d) => ({
+        ...d,
+        planner_items: d.planner_items.map((x) => {
+          if (x.subject_id !== it.subject_id) return x;
+          const c = +(x.completed_hours_this_week + h).toFixed(1);
+          return { ...x, completed_hours_this_week: c, progress_pct: Math.min(100, Math.round((c / x.recommended_weekly_hours) * 100)) };
+        }),
+      }));
+      toast.success(`Logged ${h}h for ${it.subject_code}`);
+    } catch (e) { toast.error(e.message); } finally { setBusy(null); }
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-      {/* Banner */}
-      <div className="glass-panel" style={{
-        padding: '1.5rem 2rem',
-        background: 'linear-gradient(135deg, rgba(245, 158, 11, 0.12) 0%, rgba(79, 70, 229, 0.08) 100%)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        flexWrap: 'wrap',
-        gap: '1rem'
-      }}>
-        <div>
-          <div className="badge badge-warning" style={{ marginBottom: '0.4rem' }}>
-            Engagement & Student Support (Module 2.M)
+    <div className="stack gap-16">
+      <div className="card" style={{ padding: 20 }}>
+        <div className="row gap-24 wrap">
+          <Ring value={done} max={target || 1} size={120} stroke={11}>
+            <div><div className="serif num" style={{ fontSize: 28, lineHeight: 1 }}>{Math.round((done / (target || 1)) * 100)}%</div><div className="xs muted">this week</div></div>
+          </Ring>
+          <div className="grow">
+            <div className="serif" style={{ fontSize: 26, lineHeight: 1.2 }}>{done.toFixed(1)} of {target} study hours logged</div>
+            <p className="small muted" style={{ marginTop: 6, maxWidth: 560 }}>Weekly hours are weighted by each subject’s difficulty and your live attendance — harder subjects and those where you’ve missed class get more time.</p>
+            <div className="row gap-8 wrap" style={{ marginTop: 12 }}>
+              {['High', 'Medium', 'Low'].map((p) => <Badge key={p} tone={p === 'High' ? 'danger' : p === 'Medium' ? 'warning' : 'success'}>{items.filter((i) => i.priority === p).length} {p.toLowerCase()} priority</Badge>)}
+            </div>
           </div>
-          <h1 style={{ fontSize: '1.75rem' }}>Student Engagement, Merit & AI Insights</h1>
-          <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginTop: '0.2rem' }}>
-            Merit leaderboard, achievement badges, personalized smart study planner, and AI career navigation.
-          </p>
-        </div>
-
-        {/* Tab Switcher */}
-        <div style={{ display: 'flex', background: 'var(--bg-surface-subtle)', padding: '0.25rem', borderRadius: 'var(--radius-md)' }}>
-          <button
-            onClick={() => setActiveTab('leaderboard')}
-            style={{
-              padding: '0.4rem 0.85rem',
-              borderRadius: 'var(--radius-sm)',
-              border: 'none',
-              fontSize: '0.8rem',
-              fontWeight: activeTab === 'leaderboard' ? 700 : 500,
-              cursor: 'pointer',
-              background: activeTab === 'leaderboard' ? 'var(--primary)' : 'transparent',
-              color: activeTab === 'leaderboard' ? '#fff' : 'var(--text-secondary)'
-            }}
-          >
-            🏆 Leaderboard
-          </button>
-
-          <button
-            onClick={() => setActiveTab('study-plan')}
-            style={{
-              padding: '0.4rem 0.85rem',
-              borderRadius: 'var(--radius-sm)',
-              border: 'none',
-              fontSize: '0.8rem',
-              fontWeight: activeTab === 'study-plan' ? 700 : 500,
-              cursor: 'pointer',
-              background: activeTab === 'study-plan' ? 'var(--primary)' : 'transparent',
-              color: activeTab === 'study-plan' ? '#fff' : 'var(--text-secondary)'
-            }}
-          >
-            📅 Smart Study Planner
-          </button>
-
-          <button
-            onClick={() => setActiveTab('career')}
-            style={{
-              padding: '0.4rem 0.85rem',
-              borderRadius: 'var(--radius-sm)',
-              border: 'none',
-              fontSize: '0.8rem',
-              fontWeight: activeTab === 'career' ? 700 : 500,
-              cursor: 'pointer',
-              background: activeTab === 'career' ? 'var(--primary)' : 'transparent',
-              color: activeTab === 'career' ? '#fff' : 'var(--text-secondary)'
-            }}
-          >
-            🤖 AI Career Compass
-          </button>
         </div>
       </div>
-
-      {/* TAB 1: GAMIFIED MERIT LEADERBOARD */}
-      {activeTab === 'leaderboard' && (
-        <div className="glass-panel" style={{ padding: '1.5rem' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '0.5rem' }}>
-            <div>
-              <h3 style={{ fontSize: '1.15rem' }}>Department Merit Leaderboard (CSE-2)</h3>
-              <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                Ranks computed from academic exam performance, attendance regularity, and assignment timeliness.
-              </p>
+      <div className="grid-auto" style={{ '--min': '300px' }}>
+        {items.map((it) => (
+          <Card key={it.subject_id}>
+            <div className="row-between">
+              <span className="mono xs muted">{it.subject_code}</span>
+              <Badge tone={it.priority === 'Critical' ? 'danger' : it.priority === 'High' ? 'warning' : it.priority === 'Moderate' ? 'info' : 'success'}>{it.priority}</Badge>
             </div>
-            <span className="badge badge-warning">Top Performers of 2026</span>
-          </div>
-
-          <div className="table-container">
-            <table className="erp-table">
-              <thead>
-                <tr>
-                  <th>Rank</th>
-                  <th>Student</th>
-                  <th>Roll Number</th>
-                  <th>CGPA</th>
-                  <th>Academic Score</th>
-                  <th>Attendance Regularity</th>
-                  <th>Merit Points</th>
-                  <th>Badges Earned</th>
-                </tr>
-              </thead>
-              <tbody>
-                {leaderboard.map(st => (
-                  <tr key={st.student_id} style={{ background: st.rank <= 3 ? 'rgba(79, 70, 229, 0.03)' : 'transparent' }}>
-                    <td>
-                      <span style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        width: '28px',
-                        height: '28px',
-                        borderRadius: '50%',
-                        fontWeight: 800,
-                        fontSize: '0.85rem',
-                        background: st.rank === 1 ? '#fbbf24' : (st.rank === 2 ? '#94a3b8' : (st.rank === 3 ? '#d97706' : 'var(--bg-surface-subtle)')),
-                        color: st.rank <= 3 ? '#ffffff' : 'var(--text-secondary)'
-                      }}>
-                        {st.rank}
-                      </span>
-                    </td>
-                    <td>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
-                        <img 
-                          src={st.avatar_url || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80'} 
-                          alt={st.student_name}
-                          style={{ width: '32px', height: '32px', borderRadius: '50%', objectFit: 'cover' }}
-                        />
-                        <span style={{ fontWeight: 700 }}>{st.student_name}</span>
-                      </div>
-                    </td>
-                    <td style={{ fontFamily: 'var(--font-mono)' }}>{st.roll_no}</td>
-                    <td style={{ fontWeight: 800, color: 'var(--primary)' }}>{st.current_cgpa}</td>
-                    <td>{st.academic_score} pts</td>
-                    <td>{st.attendance_score} pts</td>
-                    <td>
-                      <span style={{ fontWeight: 800, fontSize: '1rem', color: 'var(--warning)' }}>
-                        {st.total_merit_points}
-                      </span>
-                    </td>
-                    <td>
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.3rem' }}>
-                        {(st.badges || []).map((b, idx) => (
-                          <span key={idx} className="badge badge-warning" style={{ fontSize: '0.68rem', padding: '0.15rem 0.45rem' }}>
-                            ★ {b}
-                          </span>
-                        ))}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {/* TAB 2: PERSONALIZED SMART STUDY PLANNER */}
-      {activeTab === 'study-plan' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-          <div className="glass-panel" style={{ padding: '1.5rem' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '0.5rem' }}>
-              <div>
-                <h3 style={{ fontSize: '1.15rem' }}>Personalized Adaptive Study Planner</h3>
-                <p style={{ fontSize: '0.825rem', color: 'var(--text-muted)' }}>
-                  Generated automatically using your weak-subject scores and live attendance data from the Smart Attendance Tracker.
-                </p>
-              </div>
-
-              <div style={{ textAlign: 'right' }}>
-                <span className="badge badge-primary">
-                  Weekly Target: {studyPlan?.weekly_target_total_hours || 24} Hours
-                </span>
-              </div>
+            <div className="strong" style={{ marginTop: 6 }}>{it.subject_name}</div>
+            <div className="row-between small" style={{ marginTop: 12, marginBottom: 6 }}>
+              <span className="muted">{it.completed_hours_this_week}h of {it.recommended_weekly_hours}h</span>
+              <span className="mono strong">{it.progress_pct}%</span>
             </div>
+            <Progress value={it.progress_pct} tone={it.progress_pct >= 100 ? 'success' : undefined} />
+            {it.weak_topics && (
+              <div className="row wrap gap-4" style={{ marginTop: 12 }}>
+                {it.weak_topics.split(/\s*·\s*|,\s*/).filter(Boolean).slice(0, 3).map((t) => <Badge key={t} tone="outline">{t}</Badge>)}
+              </div>
+            )}
+            {it.reasons?.length > 0 && <div className="xs ink-2" style={{ marginTop: 10 }}>Why: {it.reasons.join(' · ')}</div>}
+            <div className="row-between xs muted" style={{ marginTop: 12 }}>
+              <span>Difficulty {Math.round(it.difficulty_index * 100)}{it.live_attendance_pct != null ? ` · attendance ${Math.round(it.live_attendance_pct)}%` : ''}{it.internal_score != null ? ` · internal ${it.internal_score}/25` : ''}</span>
+              {isStudent && (
+                <div className="row gap-4">
+                  {[0.5, 1].map((h) => <button key={h} className="btn btn-ghost btn-sm" disabled={busy === it.subject_id} onClick={() => log(it, h)}><Plus size={12} />{h}h</button>)}
+                </div>
+              )}
+            </div>
+          </Card>
+        ))}
+      </div>
+    </div>
+  );
+}
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-              {(studyPlan?.planner_items || []).map(item => (
-                <div key={item.subject_id} style={{
-                  padding: '1.25rem',
-                  borderRadius: 'var(--radius-md)',
-                  background: 'var(--bg-surface-subtle)',
-                  border: `1px solid ${item.priority === 'Critical' ? 'var(--danger-border)' : 'var(--border-subtle)'}`,
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '0.75rem'
-                }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
-                    <div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                        <h4 style={{ fontSize: '1rem', fontWeight: 800 }}>{item.subject_name}</h4>
-                        <span className="badge badge-info">{item.subject_code}</span>
-                        <span className={`badge badge-${item.priority === 'Critical' ? 'danger' : (item.priority === 'High' ? 'warning' : 'primary')}`}>
-                          Priority: {item.priority}
-                        </span>
-                      </div>
-                      <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
-                        Difficulty Index: <strong>{item.difficulty_index}</strong> • Attendance: <strong>{item.live_attendance_pct}%</strong>
-                      </div>
-                    </div>
-
-                    <div style={{ textAlign: 'right' }}>
-                      <div style={{ fontSize: '1.1rem', fontWeight: 800 }}>
-                        {item.completed_hours_this_week} / {item.recommended_weekly_hours} hrs
-                      </div>
-                      <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Logged this week</div>
-                    </div>
-                  </div>
-
-                  {/* Weak topics advice */}
-                  <div style={{
-                    padding: '0.65rem 0.85rem',
-                    background: 'var(--bg-surface)',
-                    borderRadius: '6px',
-                    fontSize: '0.8rem',
-                    color: 'var(--text-secondary)'
-                  }}>
-                    🎯 Recommended Focus Topics: <strong>{item.weak_topics}</strong>
-                  </div>
-
-                  {/* Progress bar & log action */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                    <div className="progress-bar-container" style={{ flex: 1, height: '8px' }}>
-                      <div 
-                        className={`progress-bar-fill ${item.progress_pct >= 80 ? 'success' : (item.progress_pct >= 40 ? 'warning' : 'danger')}`}
-                        style={{ width: `${Math.min(100, item.progress_pct)}%` }}
-                      ></div>
-                    </div>
-
-                    {loggingSubjectId === item.subject_id ? (
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                        <input
-                          type="number"
-                          step="0.5"
-                          min="0.5"
-                          max="8"
-                          value={loggedHours}
-                          onChange={(e) => setLoggedHours(Number(e.target.value))}
-                          className="form-input"
-                          style={{ width: '70px', padding: '0.25rem 0.5rem', fontSize: '0.8rem' }}
-                        />
-                        <button onClick={() => handleLogStudyTime(item.subject_id)} className="btn btn-success btn-sm">
-                          Save
-                        </button>
-                        <button onClick={() => setLoggingSubjectId(null)} className="btn btn-secondary btn-sm">
-                          Cancel
-                        </button>
-                      </div>
-                    ) : (
-                      <button
-                        onClick={() => {
-                          setLoggingSubjectId(item.subject_id);
-                          setLoggedHours(1.5);
-                        }}
-                        className="btn btn-outline btn-sm"
-                      >
-                        <Plus size={14} /> Log Study Time
-                      </button>
-                    )}
-                  </div>
+/* ---------------------------------------------------------------------- */
+function Career() {
+  const { data, loading, error, hardReload } = useLoader((api) => settle(api('/engagement/career-recommendations/me'), null).then((d) => d || Promise.reject(new Error('Career guidance is unavailable right now.'))));
+  if (loading) return <div className="grid-3">{[0, 1, 2].map((i) => <Skeleton key={i} h={380} r={14} />)}</div>;
+  if (error) return <ErrorState error={error} onRetry={hardReload} />;
+  const recs = data?.recommendations || [];
+  return (
+    <div className="stack gap-16">
+      <div className="row gap-8 small muted"><Cpu size={14} /> Generated by the {data?.ai_provider === 'rule-based' ? 'rule-based engine' : data?.ai_provider} from {data?.analysis_basis?.toLowerCase()}</div>
+      {recs.length === 0 ? <div className="card"><EmptyState icon={Compass} title="No recommendations yet" /></div> : (
+        <div className="grid-auto" style={{ '--min': '320px' }}>
+          {recs.map((r, i) => (
+            <Card key={r.role} className={cx('rise', i === 0 && 'tint-accent')}>
+              <div className="row gap-16" style={{ alignItems: 'flex-start' }}>
+                <Ring value={r.fit_score} size={74} stroke={7}><span className="serif num" style={{ fontSize: 20 }}>{r.fit_score}</span></Ring>
+                <div className="grow">
+                  {i === 0 && <Badge tone="accent" style={{ marginBottom: 6 }}><Sparkles size={11} /> Best fit</Badge>}
+                  <div className="serif" style={{ fontSize: 22, lineHeight: 1.15 }}>{r.role}</div>
+                  <div className="xs muted row gap-4" style={{ marginTop: 6 }}><TrendingUp size={12} /> {r.market_demand}</div>
+                </div>
+              </div>
+              {[['Strengths you bring', r.matching_strengths, 'success'], ['Areas to grow', r.growth_areas, 'warning'], ['Recommended certifications', r.recommended_certifications, 'info']].map(([t, xs, tone]) => (
+                <div key={t} style={{ marginTop: 16 }}>
+                  <div className="eyebrow" style={{ marginBottom: 8 }}>{t}</div>
+                  <div className="row wrap gap-6">{(xs || []).map((x) => <Badge key={x} tone={tone}>{x}</Badge>)}</div>
                 </div>
               ))}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* TAB 3: AI CAREER COMPASS */}
-      {activeTab === 'career' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-          <div className="glass-panel" style={{ padding: '1.5rem' }}>
-            <div style={{ marginBottom: '1.25rem' }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                  <Brain size={22} color="var(--primary)" />
-                  <h3 style={{ fontSize: '1.2rem' }}>AI-Powered Skill & Career Recommendations</h3>
-                </div>
-                <span className={`badge ${careerRecs?.ai_provider?.startsWith('groq:') ? 'badge-success' : 'badge-info'}`}>
-                  {careerRecs?.ai_provider?.startsWith('groq:')
-                    ? `Powered by Groq (${careerRecs.ai_provider.replace('groq:', '')})`
-                    : 'Rule-Based Engine (Set GROQ_API_KEY in backend/.env for live LLM)'}
-                </span>
-              </div>
-              <p style={{ fontSize: '0.825rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
-                Derived from your academic performance trends, coursework strengths in OS, Networks, Algorithms & AI, and placement requirements.
-              </p>
-            </div>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-              {(careerRecs?.recommendations || []).map((rec, idx) => (
-                <div key={idx} style={{
-                  padding: '1.5rem',
-                  borderRadius: 'var(--radius-lg)',
-                  background: 'var(--bg-surface-subtle)',
-                  border: '1px solid var(--border-subtle)',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '0.85rem'
-                }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
-                    <div>
-                      <h4 style={{ fontSize: '1.15rem', fontWeight: 800 }}>{rec.role}</h4>
-                      <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.15rem' }}>
-                        Industry Demand: <strong style={{ color: 'var(--success)' }}>{rec.market_demand}</strong>
-                      </div>
-                    </div>
-
-                    <div style={{ textAlign: 'right' }}>
-                      <div style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--primary)' }}>
-                        {rec.fit_score}%
-                      </div>
-                      <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Skill Compatibility Match</div>
-                    </div>
-                  </div>
-
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '0.85rem' }}>
-                    <div style={{ padding: '0.75rem', borderRadius: 'var(--radius-md)', background: 'var(--bg-surface)' }}>
-                      <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--success)', marginBottom: '0.35rem' }}>
-                        ✓ Proven Academic Strengths:
-                      </div>
-                      <ul style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', paddingLeft: '1.1rem' }}>
-                        {rec.matching_strengths.map((s, sIdx) => (
-                          <li key={sIdx}>{s}</li>
-                        ))}
-                      </ul>
-                    </div>
-
-                    <div style={{ padding: '0.75rem', borderRadius: 'var(--radius-md)', background: 'var(--bg-surface)' }}>
-                      <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--warning)', marginBottom: '0.35rem' }}>
-                        ⚡ High-Impact Skill Gaps to Bridge:
-                      </div>
-                      <ul style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', paddingLeft: '1.1rem' }}>
-                        {rec.growth_areas.map((g, gIdx) => (
-                          <li key={gIdx}>{g}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  </div>
-
-                  <div style={{
-                    padding: '0.65rem 0.85rem',
-                    borderRadius: 'var(--radius-md)',
-                    background: 'var(--primary-glow)',
-                    border: '1px solid rgba(79, 70, 229, 0.25)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    fontSize: '0.78rem',
-                    flexWrap: 'wrap',
-                    gap: '0.5rem'
-                  }}>
-                    <span>Recommended Industry Certifications: <strong>{rec.recommended_certifications.join(' • ')}</strong></span>
-                    <span className="badge badge-primary">Curated Roadmap</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
+            </Card>
+          ))}
         </div>
       )}
     </div>

@@ -1,244 +1,221 @@
 #!/usr/bin/env python3
 """
 CGPA Probability & Subject Difficulty Prediction Engine
-Student Management ERP System - GTBIT (Guru Gobind Singh Indraprastha University)
-Implements weighted statistical modeling based on:
-  1. Historical Subject Difficulty Index (pass rate, avg score variance)
-  2. Internal Assessments & Assignment performance
-  3. Live Smart Attendance Tracker percentage
+Student Management ERP System - GTBIT (GGSIPU)
+
+Mirrors backend/src/services/cgpaCalculator.js exactly. The model is driven by the
+institution's live policy (attendance threshold, grading scale and model weights),
+which the Node API passes in with every payload.
+
+Modes
+  python cgpa_engine.py            read one JSON payload from stdin, print the result
+  python cgpa_engine.py --serve    long-lived worker: one JSON request per line
+                                   {"id": n, "batch": [payload, ...]} -> {"id": n, "results": [...]}
 """
 
-import sys
 import json
-import math
+import sys
+
+MAX_INTERNAL = 25.0
+MAX_ASSIGNMENT = 15.0
+EXTERNAL_SHARE = 60.0
+
+DEFAULT_WEIGHTS = {"internal_weight": 0.45, "difficulty_weight": 0.35, "attendance_weight": 0.20}
+DEFAULT_SCALE = [
+    {"grade": "O", "min": 90, "points": 10, "label": "Outstanding"},
+    {"grade": "A+", "min": 75, "points": 9, "label": "Excellent"},
+    {"grade": "A", "min": 65, "points": 8, "label": "Very Good"},
+    {"grade": "B+", "min": 55, "points": 7, "label": "Good"},
+    {"grade": "B", "min": 50, "points": 6, "label": "Above Average"},
+    {"grade": "C", "min": 45, "points": 5, "label": "Average"},
+    {"grade": "P", "min": 40, "points": 4, "label": "Pass"},
+    {"grade": "F", "min": 0, "points": 0, "label": "Fail"},
+]
+
+
+def r1(v):
+    return round(v * 10) / 10
+
+
+def r2(v):
+    return round(v * 100) / 100
+
+
+def clamp(v, lo, hi):
+    return max(lo, min(hi, v))
+
 
 def calculate_subject_difficulty(pass_pct, avg_marks):
-    """
-    Difficulty Index scaled from 0.05 (easiest) to 0.95 (most challenging).
-    Higher pass rate and higher average marks imply lower difficulty.
-    Formula: 1.0 - (0.55 * (avg_marks / 100.0) + 0.45 * (pass_pct / 100.0))
-    """
-    norm_pass = max(0.0, min(100.0, float(pass_pct))) / 100.0
-    norm_marks = max(0.0, min(100.0, float(avg_marks))) / 100.0
-    raw_difficulty = 1.0 - (0.55 * norm_marks + 0.45 * norm_pass)
-    # Clamp to realistic bounds [0.10, 0.90]
-    return round(max(0.10, min(0.90, raw_difficulty)), 3)
+    norm_pass = clamp(float(pass_pct), 0.0, 100.0) / 100.0
+    norm_marks = clamp(float(avg_marks), 0.0, 100.0) / 100.0
+    raw = 1.0 - (0.55 * norm_marks + 0.45 * norm_pass)
+    return round(clamp(raw, 0.10, 0.90), 3)
 
-def marks_to_grade_point(score):
-    """GGSIPU standard 10-point grading scale mapping"""
-    if score >= 90:
-        return 10.0, 'O', 'Outstanding'
-    elif score >= 75:
-        return 9.0, 'A+', 'Excellent'
-    elif score >= 65:
-        return 8.0, 'A', 'Very Good'
-    elif score >= 55:
-        return 7.0, 'B+', 'Good'
-    elif score >= 50:
-        return 6.0, 'B', 'Above Average'
-    elif score >= 45:
-        return 5.0, 'C', 'Average'
-    elif score >= 40:
-        return 4.0, 'P', 'Pass'
-    else:
-        return 0.0, 'F', 'Fail'
 
-def predict_subject_score(internal_score, max_internal, assignment_score, max_assignment, 
-                          attendance_pct, difficulty_index, hypothetical_adjustment=0):
-    """
-    Predicts final semester score (out of 100) using multi-factor weighted regression model:
-      - Continuous Internal Performance (40% weight total: 25% mid-term/internals + 15% assignments)
-      - Smart Attendance factor (15% weight with exponential penalty below 75% threshold)
-      - Historical End-Term Projection based on subject difficulty (45% weight)
-    """
-    # 1. Normalize internal assessment (0 to 100 scale)
-    internal_norm = (internal_score / max_internal * 100.0) if max_internal > 0 else 70.0
-    assignment_norm = (assignment_score / max_assignment * 100.0) if max_assignment > 0 else 75.0
-    coursework_composite = 0.65 * internal_norm + 0.35 * assignment_norm
+def grade_for(score, scale):
+    for band in scale:
+        if score >= band["min"]:
+            return band
+    return scale[-1]
 
-    # 2. Attendance factor: GGSIPU mandates 75% attendance
-    # Bonus for >85%, severe drag for <75%
-    att = float(attendance_pct)
-    if att >= 85.0:
-        attendance_multiplier = 1.05
-    elif att >= 75.0:
-        attendance_multiplier = 1.00
-    elif att >= 65.0:
-        attendance_multiplier = 0.88 # slight penalty
-    else:
-        attendance_multiplier = 0.72 # attendance risk impact
 
-    # 3. Projected external score (out of 100 scale)
-    # External exam expectation correlates with coursework but gets pulled down by high subject difficulty
-    expected_external = coursework_composite * (1.15 - 0.50 * difficulty_index) * attendance_multiplier
+def pass_mark(scale):
+    passing = [b for b in scale if b["points"] > 0]
+    return passing[-1]["min"] if passing else 40
 
-    # 4. Final blended score prediction
-    # Internal component = 40 marks, External component = 60 marks
-    projected_internal_component = (coursework_composite / 100.0) * 40.0
-    projected_external_component = (expected_external / 100.0) * 60.0
-    
-    raw_predicted = projected_internal_component + projected_external_component + hypothetical_adjustment
-    final_predicted = max(0.0, min(100.0, raw_predicted))
 
-    # Calculate Confidence Variance (spread) based on difficulty and attendance consistency
-    # Higher difficulty or erratic attendance increases uncertainty window
-    uncertainty_margin = 3.5 + (difficulty_index * 6.0) + (max(0, 75.0 - att) * 0.15)
-    score_lower = max(0.0, round(final_predicted - uncertainty_margin, 1))
-    score_upper = min(100.0, round(final_predicted + uncertainty_margin, 1))
+def resolve_policy(p):
+    p = p or {}
+    weights = dict(DEFAULT_WEIGHTS)
+    weights.update(p.get("weights") or {})
+    scale = p.get("scale") or DEFAULT_SCALE
+    scale = sorted(scale, key=lambda b: -float(b["min"]))
+    return {"threshold": float(p.get("threshold", 75)), "weights": weights, "scale": scale}
 
-    gp_expected, grade_expected, grade_desc = marks_to_grade_point(final_predicted)
-    gp_lower, grade_lower, _ = marks_to_grade_point(score_lower)
-    gp_upper, grade_upper, _ = marks_to_grade_point(score_upper)
 
-    # Early warning flag criteria
-    is_at_risk = False
-    warning_reason = None
+def predict_subject(item, policy, adjustment=0.0):
+    scale, threshold, w = policy["scale"], policy["threshold"], policy["weights"]
+    w_sum = (float(w["internal_weight"]) + float(w["attendance_weight"]) + float(w["difficulty_weight"])) or 1.0
 
-    if att < 75.0:
-        is_at_risk = True
-        warning_reason = f"Low Attendance ({att:.1f}%) breaches 75% mandatory threshold"
-    elif difficulty_index >= 0.65 and coursework_composite < 60.0:
-        is_at_risk = True
-        warning_reason = f"High difficulty subject ({difficulty_index:.2f}) with low coursework score ({coursework_composite:.1f})"
-    elif final_predicted < 50.0:
-        is_at_risk = True
-        warning_reason = f"Predicted score ({final_predicted:.1f}) is near the passing threshold"
+    has_marks = item.get("internal_score") is not None
+    max_internal = float(item.get("max_internal") or MAX_INTERNAL)
+    max_assignment = float(item.get("max_assignment") or MAX_ASSIGNMENT)
+    prior = clamp(float(item.get("historical_avg_marks", 70) if item.get("historical_avg_marks") is not None else 70), 0, 100) / 100.0
+    internal = float(item["internal_score"]) if has_marks else prior * max_internal
+    assignment = float(item["assignment_score"]) if item.get("assignment_score") is not None else prior * max_assignment
+
+    internal_pct = internal / max_internal * 100.0 if max_internal > 0 else 70.0
+    assignment_pct = assignment / max_assignment * 100.0 if max_assignment > 0 else 70.0
+    coursework = 0.65 * internal_pct + 0.35 * assignment_pct
+
+    diff = item.get("difficulty_index")
+    if diff is None:
+        diff = calculate_subject_difficulty(item.get("historical_pass_pct", 85), item.get("historical_avg_marks", 70))
+    diff = float(diff)
+    att = clamp(float(item.get("attendance_pct", 100) if item.get("attendance_pct") is not None else 100), 0, 100)
+    ease = (1 - diff) * 100.0
+
+    external_pct = (float(w["internal_weight"]) * coursework + float(w["attendance_weight"]) * att + float(w["difficulty_weight"]) * ease) / w_sum
+    if att < threshold:
+        external_pct *= max(0.6, 1 - 0.012 * (threshold - att))
+
+    coursework_marks = internal / max_internal * MAX_INTERNAL + assignment / max_assignment * MAX_ASSIGNMENT
+    raw = coursework_marks + external_pct / 100.0 * EXTERNAL_SHARE + float(adjustment or 0)
+    predicted = r1(clamp(raw, 0, 100))
+
+    margin = 3.5 + diff * 6 + max(0, threshold - att) * 0.15 + (0 if has_marks else 4)
+    lo = r1(clamp(predicted - margin, 0, 100))
+    hi = r1(clamp(predicted + margin, 0, 100))
+
+    exp = grade_for(predicted, scale)
+    pm = pass_mark(scale)
+
+    warning = None
+    if att < threshold:
+        warning = "Low attendance (%.1f%%) breaches the %s%% eligibility rule" % (att, ("%g" % threshold))
+    elif diff >= 0.65 and coursework < 60:
+        warning = "High-difficulty subject (%.2f) with weak coursework (%.1f%%)" % (diff, coursework)
+    elif predicted < pm + 10:
+        warning = "Projected score %.1f is close to the pass mark (%s)" % (predicted, ("%g" % pm))
 
     return {
-        "predicted_score": round(final_predicted, 1),
-        "score_range": [score_lower, score_upper],
-        "predicted_grade_point": gp_expected,
-        "predicted_grade": grade_expected,
-        "grade_range": [grade_lower, grade_upper],
-        "difficulty_index": round(difficulty_index, 2),
-        "attendance_pct": round(att, 1),
-        "coursework_score": round(coursework_composite, 1),
-        "is_at_risk": is_at_risk,
-        "warning_reason": warning_reason
+        "subject_id": item.get("id"),
+        "subject_code": item.get("code"),
+        "subject_name": item.get("name"),
+        "credits": float(item.get("credits") or 4),
+        "predicted_score": predicted,
+        "score_range": [lo, hi],
+        "predicted_grade_point": exp["points"],
+        "predicted_grade": exp["grade"],
+        "grade_range": [grade_for(lo, scale)["grade"], grade_for(hi, scale)["grade"]],
+        "difficulty_index": r2(diff),
+        "attendance_pct": r1(att),
+        "coursework_score": r1(coursework),
+        "has_internal_marks": has_marks,
+        "hypothetical_adjustment": float(adjustment or 0),
+        "is_at_risk": warning is not None,
+        "warning_reason": warning,
     }
+
 
 def run_probability_analysis(payload):
-    """
-    Main entry point for calculating semester CGPA predictions and what-if scenarios.
-    """
-    subjects_data = payload.get("subjects", [])
-    current_cgpa = float(payload.get("current_cgpa", 8.2))
-    previous_credits = int(payload.get("previous_credits", 60))
-    hypothetical_adjustments = payload.get("what_if_adjustments", {}) # { subject_id: +/- marks }
+    policy = resolve_policy(payload.get("policy"))
+    current_cgpa = float(payload.get("current_cgpa") or 0)
+    previous_credits = float(payload.get("previous_credits") or 0)
+    what_if = payload.get("what_if_adjustments") or {}
 
-    total_sem_credits = 0
-    weighted_expected_gp = 0.0
-    weighted_lower_gp = 0.0
-    weighted_upper_gp = 0.0
+    subjects = [predict_subject(it, policy, what_if.get(str(it.get("id")), 0)) for it in payload.get("subjects", [])]
+    credits = exp = lo = hi = 0.0
+    for s in subjects:
+        credits += s["credits"]
+        exp += s["predicted_grade_point"] * s["credits"]
+        lo += grade_for(s["score_range"][0], policy["scale"])["points"] * s["credits"]
+        hi += grade_for(s["score_range"][1], policy["scale"])["points"] * s["credits"]
 
-    analyzed_subjects = []
-    at_risk_subjects = []
+    sgpa = r2(exp / credits) if credits else current_cgpa
+    sgpa_lo = r2(lo / credits) if credits else current_cgpa
+    sgpa_hi = r2(hi / credits) if credits else current_cgpa
+    total = previous_credits + credits
 
-    for item in subjects_data:
-        sub_id = str(item.get("id"))
-        credits = int(item.get("credits", 4))
-        pass_pct = float(item.get("historical_pass_pct", 85.0))
-        avg_marks = float(item.get("historical_avg_marks", 70.0))
-        
-        # Calculate or use provided difficulty index
-        diff_idx = item.get("difficulty_index")
-        if diff_idx is None:
-            diff_idx = calculate_subject_difficulty(pass_pct, avg_marks)
-        else:
-            diff_idx = float(diff_idx)
+    def blend(v):
+        return r2((current_cgpa * previous_credits + v * credits) / total) if total else v
 
-        internal = float(item.get("internal_score", 18))
-        max_internal = float(item.get("max_internal", 25))
-        assignment = float(item.get("assignment_score", 12))
-        max_assignment = float(item.get("max_assignment", 15))
-        attendance = float(item.get("attendance_pct", 82.0))
-
-        # Check for user what-if tweak
-        hypothetical_adj = float(hypothetical_adjustments.get(sub_id, 0))
-
-        pred = predict_subject_score(
-            internal_score=internal,
-            max_internal=max_internal,
-            assignment_score=assignment,
-            max_assignment=max_assignment,
-            attendance_pct=attendance,
-            difficulty_index=diff_idx,
-            hypothetical_adjustment=hypothetical_adj
-        )
-
-        pred["subject_id"] = item.get("id")
-        pred["subject_code"] = item.get("code")
-        pred["subject_name"] = item.get("name")
-        pred["credits"] = credits
-        pred["hypothetical_adjustment"] = hypothetical_adj
-
-        analyzed_subjects.append(pred)
-        if pred["is_at_risk"]:
-            at_risk_subjects.append({
-                "subject_code": pred["subject_code"],
-                "subject_name": pred["subject_name"],
-                "reason": pred["warning_reason"],
-                "predicted_grade": pred["predicted_grade"],
-                "predicted_score": pred["predicted_score"]
-            })
-
-        total_sem_credits += credits
-        weighted_expected_gp += (pred["predicted_grade_point"] * credits)
-        weighted_lower_gp += (marks_to_grade_point(pred["score_range"][0])[0] * credits)
-        weighted_upper_gp += (marks_to_grade_point(pred["score_range"][1])[0] * credits)
-
-    if total_sem_credits > 0:
-        predicted_sgpa = round(weighted_expected_gp / total_sem_credits, 2)
-        sgpa_lower = round(weighted_lower_gp / total_sem_credits, 2)
-        sgpa_upper = round(weighted_upper_gp / total_sem_credits, 2)
-    else:
-        predicted_sgpa = current_cgpa
-        sgpa_lower = current_cgpa - 0.3
-        sgpa_upper = current_cgpa + 0.3
-
-    # Cumulative CGPA aggregation
-    total_cumulative_credits = previous_credits + total_sem_credits
-    if total_cumulative_credits > 0:
-        predicted_cgpa = round(((current_cgpa * previous_credits) + (predicted_sgpa * total_sem_credits)) / total_cumulative_credits, 2)
-        cgpa_lower = round(((current_cgpa * previous_credits) + (sgpa_lower * total_sem_credits)) / total_cumulative_credits, 2)
-        cgpa_upper = round(((current_cgpa * previous_credits) + (sgpa_upper * total_sem_credits)) / total_cumulative_credits, 2)
-    else:
-        predicted_cgpa = predicted_sgpa
-        cgpa_lower = sgpa_lower
-        cgpa_upper = sgpa_upper
-
-    # Model confidence score (0 - 100%)
-    # Confidence is higher when attendance is regular and grade range is tight
-    avg_uncertainty = sum(sub["score_range"][1] - sub["score_range"][0] for sub in analyzed_subjects) / max(1, len(analyzed_subjects))
-    confidence_score = max(60, min(96, round(100 - (avg_uncertainty * 2.8))))
+    avg_band = sum(s["score_range"][1] - s["score_range"][0] for s in subjects) / max(1, len(subjects))
+    confidence = int(max(55, min(96, round(100 - avg_band * 2.6))))
+    at_risk = [
+        {
+            "subject_code": s["subject_code"],
+            "subject_name": s["subject_name"],
+            "reason": s["warning_reason"],
+            "predicted_grade": s["predicted_grade"],
+            "predicted_score": s["predicted_score"],
+        }
+        for s in subjects
+        if s["is_at_risk"]
+    ]
 
     return {
-        "predicted_sgpa": predicted_sgpa,
-        "sgpa_range": [sgpa_lower, sgpa_upper],
-        "predicted_cgpa": predicted_cgpa,
-        "cgpa_range": [cgpa_lower, cgpa_upper],
-        "confidence_score": confidence_score,
-        "confidence_level": "High" if confidence_score >= 82 else ("Moderate" if confidence_score >= 70 else "Low"),
-        "total_semester_credits": total_sem_credits,
-        "at_risk_count": len(at_risk_subjects),
-        "at_risk_subjects": at_risk_subjects,
-        "subjects": analyzed_subjects
+        "predicted_sgpa": sgpa,
+        "sgpa_range": [sgpa_lo, sgpa_hi],
+        "predicted_cgpa": blend(sgpa),
+        "cgpa_range": [blend(sgpa_lo), blend(sgpa_hi)],
+        "confidence_score": confidence,
+        "confidence_level": "High" if confidence >= 82 else ("Moderate" if confidence >= 70 else "Low"),
+        "total_semester_credits": credits,
+        "at_risk_count": len(at_risk),
+        "at_risk_subjects": at_risk,
+        "model": {"weights": policy["weights"], "attendance_threshold": policy["threshold"]},
+        "subjects": subjects,
     }
 
+
+def serve():
+    """Long-lived worker: newline-delimited JSON requests on stdin."""
+    print(json.dumps({"ready": True}), flush=True)
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        req_id = None
+        try:
+            req = json.loads(line)
+            req_id = req.get("id")
+            results = [run_probability_analysis(p) for p in req.get("batch", [])]
+            print(json.dumps({"id": req_id, "results": results}), flush=True)
+        except Exception as exc:  # report and keep serving
+            print(json.dumps({"id": req_id, "error": str(exc)}), flush=True)
+
+
 if __name__ == "__main__":
+    if "--serve" in sys.argv:
+        serve()
+        sys.exit(0)
     try:
-        if len(sys.argv) > 1:
-            raw_input = sys.argv[1]
-        else:
-            raw_input = sys.stdin.read()
-        
+        raw_input = sys.argv[1] if len(sys.argv) > 1 else sys.stdin.read()
         if not raw_input.strip():
             print(json.dumps({"error": "No input JSON provided"}))
             sys.exit(1)
-
-        data = json.loads(raw_input)
-        result = run_probability_analysis(data)
-        print(json.dumps(result, indent=2))
-    except Exception as e:
-        print(json.dumps({"error": str(e)}))
+        print(json.dumps(run_probability_analysis(json.loads(raw_input)), indent=2))
+    except Exception as exc:
+        print(json.dumps({"error": str(exc)}))
         sys.exit(1)

@@ -18,6 +18,9 @@ const {
 } = require('../db/database');
 const { verifyToken, requirePermission, logAudit } = require('../middleware/authMiddleware');
 
+const { admitStudent } = require('../services/admissions');
+const { invalidateMerit } = require('../services/merit');
+
 const router = express.Router();
 
 // GET /api/students - List students with DB-level scoping and filters
@@ -229,184 +232,51 @@ router.get('/:id', verifyToken, requirePermission('students', 'read'), async (re
   }
 });
 
-// POST /api/students - Register/Admit new student (Admin only)
+// POST /api/students - Admit a single student (login, record, fee invoice, optional guardian login)
 router.post('/', verifyToken, requirePermission('students', 'create'), async (req, res) => {
-  const {
-    fullName,
-    email,
-    phone,
-    rollNo,
-    enrollmentNo,
-    courseId,
-    departmentId,
-    semester,
-    section,
-    shift,
-    admissionYear,
-    dob,
-    bloodGroup,
-    address,
-    parentName,
-    parentPhone,
-    initialCgpa,
-    password
-  } = req.body;
-
-  if (!fullName || !email || !rollNo || !enrollmentNo) {
-    return res.status(400).json({ error: 'Full name, email, roll number, and enrollment number are required' });
-  }
-
-  const salt = bcrypt.genSaltSync(10);
-  const userPassword = password && password.trim() ? password.trim() : 'student123';
-  const defaultPass = bcrypt.hashSync(userPassword, salt);
-
   try {
-    const userId = await getNextId('users');
-    await User.create({
-      id: userId,
-      email: email.toLowerCase().trim(),
-      password_hash: defaultPass,
-      role: 'student',
-      full_name: fullName.trim(),
-      phone: phone || null,
-      avatar_url: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80'
-    });
-
-    const studentId = await getNextId('students');
-    await Student.create({
-      id: studentId,
-      user_id: userId,
-      roll_no: rollNo.trim(),
-      enrollment_no: enrollmentNo.trim(),
-      course_id: Number(courseId || 1),
-      department_id: Number(departmentId || 1),
-      semester: Number(semester || 4),
-      section: section || 'CSE-2',
-      shift: shift || 'Morning',
-      admission_year: Number(admissionYear || 2023),
-      dob: dob || '2005-01-01',
-      blood_group: bloodGroup || 'O+',
-      address: address || 'New Delhi, India',
-      status: 'Active',
-      current_cgpa: Number(initialCgpa || 8.0),
-      total_credits_earned: 76,
-      parent_name: parentName || 'Parent / Guardian',
-      parent_phone: parentPhone || phone || ''
-    });
-
+    const result = await admitStudent(req.body || {});
     await logAudit({
-      userId: req.user.id,
-      userRole: req.user.role,
-      userEmail: req.user.email,
-      action: 'STUDENT_ADMISSION',
-      entityType: 'students',
-      entityId: studentId,
-      oldValue: null,
-      newValue: { fullName, email, rollNo, enrollmentNo, semester, section, shift },
-      reason: 'New student admission registration',
-      ipAddress: req.ip
+      userId: req.user.id, userRole: req.user.role, userEmail: req.user.email,
+      action: 'STUDENT_ADMISSION', entityType: 'students', entityId: result.studentId,
+      newValue: { fullName: req.body.fullName, email: req.body.email, rollNo: req.body.rollNo, semester: req.body.semester, section: req.body.section, guardian: result.guardian?.email || null },
+      reason: 'New student admission', ipAddress: req.ip
     });
-
-    res.status(201).json({
-      message: 'Student admitted successfully',
-      studentId,
-      loginCredentials: {
-        email: email.toLowerCase().trim(),
-        temporaryPassword: userPassword
-      }
-    });
+    invalidateMerit();
+    res.status(201).json({ message: 'Student admitted', ...result });
   } catch (err) {
-    if (err.code === 11000 || (err.message && err.message.includes('duplicate key'))) {
-      return res.status(400).json({
-        error: 'A student with this email, roll number, or enrollment number already exists.'
-      });
-    }
-    res.status(500).json({ error: err.message });
+    res.status(err.status || 500).json({ error: err.message });
   }
 });
 
-// POST /api/students/batch - Bulk register multiple students (Admin only)
+// POST /api/students/batch - Bulk admission; each row is admitted independently
 router.post('/batch', verifyToken, requirePermission('students', 'create'), async (req, res) => {
-  try {
-    const { studentsList } = req.body;
-    if (!Array.isArray(studentsList) || studentsList.length === 0) {
-      return res.status(400).json({ error: 'Please provide a valid array of student records.' });
+  const list = Array.isArray(req.body?.studentsList) ? req.body.studentsList : [];
+  if (!list.length) return res.status(400).json({ error: 'studentsList must be a non-empty array' });
+  if (list.length > 500) return res.status(400).json({ error: 'Admit at most 500 students per batch' });
+  const admitted = [];
+  const errors = [];
+  for (const row of list) {
+    try {
+      const r = await admitStudent({ ...row, courseId: row.courseId || req.body.courseId, semester: row.semester || req.body.semester, section: row.section || req.body.section });
+      admitted.push({ name: row.fullName, rollNo: row.rollNo, ...r });
+    } catch (err) {
+      errors.push(`${row.fullName || row.rollNo || 'Row'}: ${err.message}`);
     }
-
-    const salt = bcrypt.genSaltSync(10);
-    const defaultPass = bcrypt.hashSync('student123', salt);
-    let successCount = 0;
-    const errors = [];
-
-    for (const st of studentsList) {
-      if (!st.fullName || !st.email || !st.rollNo || !st.enrollmentNo) {
-        errors.push(`Skipped "${st.fullName || 'Unknown'}": Missing required fields.`);
-        continue;
-      }
-
-      try {
-        const userId = await getNextId('users');
-        await User.create({
-          id: userId,
-          email: st.email.toLowerCase().trim(),
-          password_hash: st.password ? bcrypt.hashSync(st.password, salt) : defaultPass,
-          role: 'student',
-          full_name: st.fullName.trim(),
-          phone: st.phone || null,
-          avatar_url: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80'
-        });
-
-        const studentId = await getNextId('students');
-        await Student.create({
-          id: studentId,
-          user_id: userId,
-          roll_no: st.rollNo.trim(),
-          enrollment_no: st.enrollmentNo.trim(),
-          course_id: Number(st.courseId || 1),
-          department_id: Number(st.departmentId || 1),
-          semester: Number(st.semester || 4),
-          section: st.section || 'CSE-2',
-          shift: st.shift || 'Morning',
-          admission_year: Number(st.admissionYear || 2023),
-          dob: st.dob || '2005-01-01',
-          blood_group: st.bloodGroup || 'O+',
-          address: st.address || 'New Delhi, India',
-          status: 'Active',
-          current_cgpa: Number(st.initialCgpa || 8.0),
-          total_credits_earned: 76,
-          parent_name: st.parentName || 'Parent / Guardian',
-          parent_phone: st.parentPhone || st.phone || ''
-        });
-        successCount++;
-      } catch (err) {
-        errors.push(`Error for ${st.fullName} (${st.email}): ${err.message}`);
-      }
-    }
-
-    await logAudit({
-      userId: req.user.id,
-      userRole: req.user.role,
-      userEmail: req.user.email,
-      action: 'STUDENTS_BATCH_ADMISSION',
-      entityType: 'students',
-      entityId: `${successCount}_records`,
-      oldValue: null,
-      newValue: { count: successCount, errors },
-      reason: 'Batch class roster admission import',
-      ipAddress: req.ip
-    });
-
-    res.json({
-      message: `Batch processed: Successfully registered ${successCount} student(s).`,
-      successCount,
-      errors
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
   }
+  if (admitted.length) {
+    await logAudit({ userId: req.user.id, userRole: req.user.role, userEmail: req.user.email, action: 'STUDENT_BATCH_ADMISSION', entityType: 'students', entityId: 'batch', newValue: { admitted: admitted.length, failed: errors.length }, reason: 'Bulk admission', ipAddress: req.ip });
+    invalidateMerit();
+  }
+  res.status(admitted.length ? 201 : 400).json({
+    message: `${admitted.length} admitted, ${errors.length} skipped`,
+    insertedCount: admitted.length,
+    credentials: admitted.map((a) => ({ name: a.name, rollNo: a.rollNo, ...a.loginCredentials, guardian: a.guardian })),
+    errors
+  });
 });
 
-// PUT /api/students/:id - Update student record (Admin only with audit log)
+// PUT /api/students/:id - Update a student record (audited)
 router.put('/:id', verifyToken, requirePermission('students', 'update'), async (req, res) => {
   try {
     const targetId = Number(req.params.id);

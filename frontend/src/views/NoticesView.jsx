@@ -1,302 +1,162 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
+import { Megaphone, Pin, Plus, Trash2, Building2, Users, CalendarDays } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import {
-  Bell,
-  Plus,
-  Pin,
-  Search,
-  Filter,
-  AlertTriangle,
-  Calendar,
-  Briefcase,
-  Award,
-  X
-} from 'lucide-react';
+import { useApi, asList } from '../lib/api';
+import { useLoader, useDebounced } from '../lib/hooks';
+import { fmtDate, timeAgo } from '../lib/format';
+import { PageHeader, Badge, Modal, Field, EmptyState, ErrorState, Chips, SearchInput, Skeleton, useToast } from '../components/ui';
+
+const CATS = ['Urgent', 'Academic', 'Exam', 'Placement', 'Event', 'General'];
+const toneOf = (c) => ({ Urgent: 'danger', Academic: 'info', Exam: 'violet', Placement: 'accent', Event: 'warning', Financial: 'success' })[c] || 'neutral';
+const barOf = (c) => ({ Urgent: 'var(--danger)', Academic: 'var(--info)', Exam: 'var(--violet)', Placement: 'var(--accent)', Event: 'var(--warning)', Financial: 'var(--success)' })[c] || 'var(--line-strong)';
 
 export default function NoticesView() {
-  const { user, token } = useAuth();
-  const [notices, setNotices] = useState([]);
-  const [search, setSearch] = useState('');
-  const [category, setCategory] = useState('');
-  const [audience, setAudience] = useState('');
-  const [loading, setLoading] = useState(true);
+  const { user } = useAuth();
+  const call = useApi();
+  const toast = useToast();
+  const canPost = user?.role === 'admin' || user?.role === 'faculty';
+  const [cat, setCat] = useState('');
+  const [aud, setAud] = useState('All');
+  const [q, setQ] = useState('');
+  const dq = useDebounced(q, 300);
+  const [open, setOpen] = useState(null);
+  const [compose, setCompose] = useState(false);
+  const [del, setDel] = useState(null);
 
-  // Publish Modal (Admin/Faculty)
-  const [showPublishModal, setShowPublishModal] = useState(false);
-  const [newNotice, setNewNotice] = useState({
-    title: '',
-    content: '',
-    category: 'General',
-    targetAudience: 'All',
-    isPinned: false
-  });
+  const { data, loading, error, hardReload, reload } = useLoader((api) => {
+    const p = new URLSearchParams();
+    if (cat) p.set('category', cat);
+    if (aud && aud !== 'All') p.set('audience', aud);
+    if (dq) p.set('search', dq);
+    return api(`/notices?${p}`);
+  }, [cat, aud, dq]);
 
-  useEffect(() => {
-    fetchNotices();
-  }, [token, search, category, audience]);
+  const list = [...asList(data)].sort((a, b) => (b.is_pinned || 0) - (a.is_pinned || 0) || new Date(b.created_at) - new Date(a.created_at));
+  const pinned = list.filter((n) => n.is_pinned);
+  const rest = list.filter((n) => !n.is_pinned);
 
-  async function fetchNotices() {
-    if (!token) return;
-    setLoading(true);
+  const remove = async () => {
     try {
-      let url = '/api/notices?';
-      if (search) url += `search=${encodeURIComponent(search)}&`;
-      if (category) url += `category=${encodeURIComponent(category)}&`;
-      if (audience) url += `audience=${encodeURIComponent(audience)}&`;
-
-      const res = await fetch(url, {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      if (res.ok) {
-        setNotices(await res.json());
-      }
-    } catch (err) {
-      console.error('Error fetching notices:', err);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  const handlePublishSubmit = async (e) => {
-    e.preventDefault();
-    try {
-      const res = await fetch('/api/notices', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(newNotice)
-      });
-
-      if (res.ok) {
-        alert('Notice broadcasted successfully!');
-        setShowPublishModal(false);
-        setNewNotice({ title: '', content: '', category: 'General', targetAudience: 'All', isPinned: false });
-        fetchNotices();
-      }
-    } catch (err) {
-      alert('Error publishing notice: ' + err.message);
-    }
+      await call(`/notices/${del.id}`, { method: 'DELETE' });
+      toast.success('Notice removed');
+      setDel(null);
+      setOpen(null);
+      reload();
+    } catch (e) { toast.error(e.message); }
   };
 
-  const isFacultyOrAdmin = user?.role === 'admin' || user?.role === 'faculty';
+  const noticeCard = (n) => (
+    <article key={n.id} className="card interactive rise" onClick={() => setOpen(n)} style={{ overflow: 'hidden' }}>
+      <div style={{ height: 3, background: barOf(n.category) }} />
+      <div style={{ padding: 18 }}>
+        <div className="row-between">
+          <div className="row gap-6">
+            <Badge tone={toneOf(n.category)}>{n.category}</Badge>
+            {n.is_pinned ? <Badge tone="saffron"><Pin size={10} /> Pinned</Badge> : null}
+          </div>
+          <span className="xs faint">{timeAgo(n.created_at)}</span>
+        </div>
+        <h3 style={{ fontSize: 16, marginTop: 12, lineHeight: 1.35 }}>{n.title}</h3>
+        <p className="small muted clamp-3" style={{ marginTop: 6 }}>{n.content}</p>
+        <div className="row gap-12 wrap xs muted" style={{ marginTop: 14 }}>
+          <span className="strong ink-2">{n.posted_by}</span>
+          <span className="row gap-4"><Users size={11} />{n.target_audience}</span>
+          {n.department_code && <span className="row gap-4"><Building2 size={11} />{n.department_code}</span>}
+        </div>
+      </div>
+    </article>
+  );
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-      {/* Banner */}
-      <div className="glass-panel" style={{
-        padding: '1.5rem 2rem',
-        background: 'linear-gradient(135deg, rgba(239, 68, 68, 0.08) 0%, rgba(79, 70, 229, 0.08) 100%)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        flexWrap: 'wrap',
-        gap: '1rem'
-      }}>
-        <div>
-          <div className="badge badge-primary" style={{ marginBottom: '0.4rem' }}>
-            Institutional Bulletin & Dispatch (Module 2.J)
-          </div>
-          <h1 style={{ fontSize: '1.75rem' }}>Notices, Circulars & Announcements</h1>
-          <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginTop: '0.2rem' }}>
-            Official notices across departments, examination schedules, placement updates, and urgent advisories.
-          </p>
+    <>
+      <PageHeader
+        eyebrow="Communication"
+        title={<>Notice <em>board</em></>}
+        description="Official circulars from the Dean’s office, departments, accounts and the placement cell."
+        actions={canPost && <button className="btn btn-accent" onClick={() => setCompose(true)}><Plus size={15} /> Post notice</button>}
+      />
+      <div className="row-between wrap" style={{ gap: 10, marginBottom: 18 }}>
+        <Chips value={cat} onChange={setCat} options={[{ value: '', label: 'All' }, ...CATS.map((c) => ({ value: c, label: c }))]} />
+        <div className="row gap-8">
+          <select className="select" style={{ width: 140 }} value={aud} onChange={(e) => setAud(e.target.value)} aria-label="Audience">
+            {['All', 'Students', 'Faculty', 'Parents'].map((a) => <option key={a} value={a}>{a === 'All' ? 'All audiences' : a}</option>)}
+          </select>
+          <SearchInput value={q} onChange={setQ} placeholder="Search notices" style={{ width: 240 }} />
         </div>
+      </div>
 
-        {isFacultyOrAdmin && (
-          <button onClick={() => setShowPublishModal(true)} className="btn btn-primary btn-sm">
-            <Plus size={16} /> Broadcast New Notice
-          </button>
+      {loading ? <div className="grid-auto" style={{ '--min': '320px' }}>{Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} h={190} r={14} />)}</div>
+        : error ? <ErrorState error={error} onRetry={hardReload} />
+          : list.length === 0 ? <div className="card"><EmptyState icon={Megaphone} title="No notices found" description="Try another category or clear the search." /></div> : (
+            <div className="stack gap-24">
+              {pinned.length > 0 && (
+                <section>
+                  <div className="eyebrow row gap-6" style={{ marginBottom: 10 }}><Pin size={12} /> Pinned</div>
+                  <div className="grid-auto" style={{ '--min': '320px' }}>{pinned.map(noticeCard)}</div>
+                </section>
+              )}
+              {rest.length > 0 && (
+                <section>
+                  {pinned.length > 0 && <div className="eyebrow" style={{ marginBottom: 10 }}>Latest</div>}
+                  <div className="grid-auto" style={{ '--min': '320px' }}>{rest.map(noticeCard)}</div>
+                </section>
+              )}
+            </div>
+          )}
+
+      <Modal open={!!open} onClose={() => setOpen(null)} title={open?.title} size="lg"
+        subtitle={open && <span className="row gap-6 wrap"><Badge tone={toneOf(open.category)}>{open.category}</Badge><span>{open.posted_by}</span><span>· {fmtDate(open.created_at)}</span></span>}
+        footer={open?.can_delete && <button className="btn btn-danger-soft" onClick={() => setDel(open)}><Trash2 size={14} /> Delete notice</button>}>
+        {open && (
+          <div className="stack gap-16">
+            <p style={{ whiteSpace: 'pre-wrap', lineHeight: 1.75, fontSize: 15 }} className="ink-2">{open.content}</p>
+            <div className="row gap-16 wrap xs muted">
+              <span className="row gap-4"><Users size={12} /> Audience: {open.target_audience}</span>
+              {open.department_name && <span className="row gap-4"><Building2 size={12} /> {open.department_name}</span>}
+              <span className="row gap-4"><CalendarDays size={12} /> {new Date(open.created_at).toLocaleString('en-IN')}</span>
+            </div>
+          </div>
         )}
-      </div>
+      </Modal>
 
-      {/* Filter Bar */}
-      <div className="glass-panel" style={{ padding: '1rem 1.5rem', display: 'flex', gap: '1rem', flexWrap: 'wrap', alignItems: 'center' }}>
-        <div style={{ position: 'relative', flex: 1, minWidth: '220px' }}>
-          <input
-            type="text"
-            placeholder="Search circulars, keywords or authors..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="form-input"
-            style={{ paddingLeft: '2.4rem' }}
-          />
-          <Search size={16} style={{ position: 'absolute', left: '0.85rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
-        </div>
+      {canPost && <Compose open={compose} onClose={() => setCompose(false)} onDone={() => { setCompose(false); reload(); }} />}
 
-        <select
-          value={category}
-          onChange={(e) => setCategory(e.target.value)}
-          className="form-select"
-          style={{ width: '160px' }}
-        >
-          <option value="">All Categories</option>
-          <option value="Urgent">Urgent Advisories</option>
-          <option value="Academic">Academic</option>
-          <option value="Exam">Examinations</option>
-          <option value="Placement">Placements & TnP</option>
-          <option value="Event">Fest & Events</option>
-        </select>
-
-        <select
-          value={audience}
-          onChange={(e) => setAudience(e.target.value)}
-          className="form-select"
-          style={{ width: '160px' }}
-        >
-          <option value="">All Audiences</option>
-          <option value="Students">Students</option>
-          <option value="Faculty">Faculty</option>
-          <option value="Parents">Parents</option>
-        </select>
-      </div>
-
-      {/* Notices Feed */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-        {notices.map(n => {
-          const isUrgent = n.category === 'Urgent';
-          return (
-            <div
-              key={n.id}
-              className="glass-panel"
-              style={{
-                padding: '1.5rem',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '0.75rem',
-                borderLeft: isUrgent ? '4px solid var(--danger)' : (n.is_pinned ? '4px solid var(--primary)' : '1px solid var(--border-subtle)')
-              }}
-            >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '0.5rem' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                  {n.is_pinned === 1 && (
-                    <span className="badge badge-primary">
-                      <Pin size={12} /> Pinned Circular
-                    </span>
-                  )}
-                  <span className={`badge badge-${isUrgent ? 'danger' : (n.category === 'Placement' ? 'info' : 'primary')}`}>
-                    {n.category}
-                  </span>
-                  <span className="badge badge-secondary" style={{ fontSize: '0.7rem' }}>
-                    Target: {n.target_audience}
-                  </span>
-                </div>
-
-                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                  Posted {new Date(n.created_at).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}
-                </div>
-              </div>
-
-              <div>
-                <h3 style={{ fontSize: '1.15rem', color: isUrgent ? 'var(--danger)' : 'var(--text-primary)' }}>
-                  {n.title}
-                </h3>
-                <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
-                  Issued by: <strong>{n.posted_by}</strong>
-                </div>
-              </div>
-
-              <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>
-                {n.content}
-              </p>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Publish Notice Modal */}
-      {showPublishModal && (
-        <div className="modal-overlay">
-          <div className="modal-content" style={{ maxWidth: '520px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
-              <h3 style={{ fontSize: '1.25rem' }}>Broadcast Notice / Circular</h3>
-              <button onClick={() => setShowPublishModal(false)} className="btn btn-secondary btn-sm" style={{ padding: '0.3rem' }}>
-                <X size={18} />
-              </button>
-            </div>
-
-            <form onSubmit={handlePublishSubmit}>
-              <div className="form-group">
-                <label className="form-label">Notice Title *</label>
-                <input
-                  type="text"
-                  required
-                  className="form-input"
-                  value={newNotice.title}
-                  onChange={(e) => setNewNotice({ ...newNotice, title: e.target.value })}
-                  placeholder="e.g. Schedule for Mid-Term Examination 2026"
-                />
-              </div>
-
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
-                <div className="form-group">
-                  <label className="form-label">Category</label>
-                  <select
-                    className="form-select"
-                    value={newNotice.category}
-                    onChange={(e) => setNewNotice({ ...newNotice, category: e.target.value })}
-                  >
-                    <option value="General">General</option>
-                    <option value="Urgent">Urgent</option>
-                    <option value="Academic">Academic</option>
-                    <option value="Exam">Exam</option>
-                    <option value="Placement">Placement</option>
-                    <option value="Event">Event</option>
-                  </select>
-                </div>
-
-                <div className="form-group">
-                  <label className="form-label">Audience</label>
-                  <select
-                    className="form-select"
-                    value={newNotice.targetAudience}
-                    onChange={(e) => setNewNotice({ ...newNotice, targetAudience: e.target.value })}
-                  >
-                    <option value="All">All Campuses</option>
-                    <option value="Students">Students Only</option>
-                    <option value="Faculty">Faculty Only</option>
-                    <option value="Parents">Parents Only</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="form-group">
-                <label className="form-label">Notice Content *</label>
-                <textarea
-                  required
-                  className="form-textarea"
-                  value={newNotice.content}
-                  onChange={(e) => setNewNotice({ ...newNotice, content: e.target.value })}
-                  placeholder="Official notification text, statutory compliance directives, or event guidelines..."
-                  style={{ minHeight: '120px' }}
-                />
-              </div>
-
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1.25rem' }}>
-                <input
-                  type="checkbox"
-                  id="pinCheck"
-                  checked={newNotice.isPinned}
-                  onChange={(e) => setNewNotice({ ...newNotice, isPinned: e.target.checked })}
-                />
-                <label htmlFor="pinCheck" style={{ fontSize: '0.825rem', cursor: 'pointer', fontWeight: 600 }}>
-                  Pin this circular to top of campus dashboard
-                </label>
-              </div>
-
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
-                <button type="button" onClick={() => setShowPublishModal(false)} className="btn btn-secondary">
-                  Cancel
-                </button>
-                <button type="submit" className="btn btn-primary">
-                  Publish Circular
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-    </div>
+      <Modal open={!!del} onClose={() => setDel(null)} title="Delete this notice?" size="sm" icon={Trash2}
+        footer={<><button className="btn btn-ghost" onClick={() => setDel(null)}>Cancel</button><button className="btn btn-danger" onClick={remove}>Delete</button></>}>
+        <p className="ink-2">“{del?.title}” will be removed from every notice board.</p>
+      </Modal>
+    </>
   );
 }
+
+function Compose({ open, onClose, onDone }) {
+  const call = useApi();
+  const toast = useToast();
+  const { facultyProfile } = useAuth();
+  const [f, setF] = useState({ title: '', content: '', category: 'Academic', targetAudience: 'All', isPinned: false });
+  const [busy, setBusy] = useState(false);
+  const set = (k) => (e) => setF((x) => ({ ...x, [k]: e.target.type === 'checkbox' ? e.target.checked : e.target.value }));
+  const submit = async (e) => {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      await call('/notices', { method: 'POST', body: { ...f, isPinned: f.isPinned ? 1 : 0, departmentId: facultyProfile?.department_id || 1 } });
+      toast.success('Notice published');
+      setF({ title: '', content: '', category: 'Academic', targetAudience: 'All', isPinned: false });
+      onDone();
+    } catch (err) { toast.error(err.message); } finally { setBusy(false); }
+  };
+  return (
+    <Modal open={open} onClose={onClose} title="Post a notice" icon={Megaphone} size="lg"
+      footer={<><button className="btn btn-ghost" onClick={onClose}>Cancel</button><button className="btn btn-accent" type="submit" form="notice-form" disabled={busy}>{busy ? 'Publishing…' : 'Publish'}</button></>}>
+      <form id="notice-form" className="form-grid" onSubmit={submit}>
+        <Field label="Title" className="full"><input className="input" required value={f.title} onChange={set('title')} /></Field>
+        <Field label="Category"><select className="select" value={f.category} onChange={set('category')}>{CATS.map((c) => <option key={c}>{c}</option>)}</select></Field>
+        <Field label="Audience"><select className="select" value={f.targetAudience} onChange={set('targetAudience')}>{['All', 'Students', 'Faculty', 'Parents'].map((a) => <option key={a}>{a}</option>)}</select></Field>
+        <Field label="Message" className="full"><textarea className="textarea" style={{ minHeight: 160 }} required value={f.content} onChange={set('content')} /></Field>
+        <label className="check full"><input type="checkbox" checked={f.isPinned} onChange={set('isPinned')} /> Pin to the top of every board</label>
+      </form>
+    </Modal>
+  );
+}
+

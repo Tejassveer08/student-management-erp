@@ -10,6 +10,8 @@ const {
   getNextId
 } = require('../db/database');
 const { verifyToken, requirePermission, requireRoles, logAudit } = require('../middleware/authMiddleware');
+const { refreshFees, nextReceiptNo } = require('../services/feeLedger');
+const { notifyStudents } = require('../services/notify');
 
 const router = express.Router();
 
@@ -63,6 +65,7 @@ router.get('/student/:studentId', verifyToken, requirePermission('fees', 'read')
 
     if (!targetId) return res.status(400).json({ error: 'Student ID required' });
 
+    await refreshFees({ student_id: targetId });
     const payments = await StudentFeePayment.find({ student_id: targetId }).lean();
     if (payments.length === 0) return res.json([]);
 
@@ -145,74 +148,54 @@ router.post('/checkout-session', verifyToken, requirePermission('fees', 'pay'), 
   }
 });
 
-// POST /api/fees/pay - Process simulated payment & generate digital receipt (Parent & Admin)
+// POST /api/fees/pay — record a payment (full or part) and issue a sequential receipt
 router.post('/pay', verifyToken, requirePermission('fees', 'pay'), async (req, res) => {
   try {
     const { paymentId, paymentMethod, transactionRef } = req.body;
-
     if (!paymentId) return res.status(400).json({ error: 'Payment ID is required' });
-
+    await refreshFees({ id: Number(paymentId) }, { force: true });
     const payment = await StudentFeePayment.findOne({ id: Number(paymentId) }).lean();
     if (!payment) return res.status(404).json({ error: 'Fee record not found' });
-
     if (req.user.role === 'parent') {
       const isWard = await WardLink.findOne({ parent_user_id: req.user.id, student_id: payment.student_id }).lean();
-      if (!isWard) {
-        return res.status(403).json({ error: 'Access denied: You cannot process payments for students outside your ward links.' });
-      }
+      if (!isWard) return res.status(403).json({ error: 'Access denied: you can only pay for your linked wards.' });
     }
+    const payable = payment.amount_due + (payment.fine_amount || 0);
+    const outstanding = Math.max(0, payable - (payment.amount_paid || 0));
+    if (payment.status === 'Paid' || outstanding <= 0) return res.status(409).json({ error: 'This invoice is already fully paid.' });
 
-    const receiptNo = `REC-GTB-2026-${Math.floor(1000 + Math.random() * 9000)}`;
-    const txnId = transactionRef || `TXN_GTB_${Date.now()}_${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
-    const totalPaid = payment.amount_due + (payment.fine_amount || 0);
-    const paymentDate = new Date().toISOString();
+    const amount = req.body.amount !== undefined && req.body.amount !== null && req.body.amount !== '' ? Math.round(Number(req.body.amount)) : outstanding;
+    if (!Number.isFinite(amount) || amount < 1 || amount > outstanding) {
+      return res.status(400).json({ error: `Enter an amount between ₹1 and ₹${outstanding.toLocaleString('en-IN')}` });
+    }
+    const receiptNo = await nextReceiptNo();
+    const txnId = String(transactionRef || `TXN-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`).slice(0, 64);
+    const paidAt = new Date();
+    const newPaid = (payment.amount_paid || 0) + amount;
+    const status = newPaid >= payable ? 'Paid' : 'Partial';
+    const method = paymentMethod || 'UPI';
 
     await StudentFeePayment.updateOne(
-      { id: Number(paymentId) },
+      { id: payment.id },
       {
-        $set: {
-          amount_paid: totalPaid,
-          status: 'Paid',
-          payment_method: paymentMethod || 'UPI / QR',
-          transaction_id: txnId,
-          receipt_no: receiptNo,
-          payment_date: paymentDate
-        }
+        $set: { amount_paid: newPaid, status, payment_method: method, transaction_id: txnId, receipt_no: receiptNo, payment_date: paidAt },
+        $push: { payments: { amount, method, transaction_id: txnId, receipt_no: receiptNo, paid_at: paidAt, by_user: req.user.id } }
       }
     );
-
-    const student = await Student.findOne({ id: payment.student_id }).lean();
-    if (student) {
-      const notifId1 = await getNextId('notifications');
-      await Notification.create({
-        id: notifId1,
-        user_id: student.user_id,
-        title: 'Fee Payment Received',
-        message: `Payment of Rs. ${totalPaid.toLocaleString()} received successfully. Receipt No: ${receiptNo}.`,
-        type: 'fee_reminder',
-        link_url: '/fees'
-      });
-
-      if (student.parent_user_id) {
-        const notifId2 = await getNextId('notifications');
-        await Notification.create({
-          id: notifId2,
-          user_id: student.parent_user_id,
-          title: 'Fee Payment Confirmed',
-          message: `College fee payment for Roll No ${student.roll_no} confirmed. Receipt: ${receiptNo}.`,
-          type: 'fee_reminder',
-          link_url: '/fees'
-        });
-      }
-    }
-
-    res.json({
-      message: 'Payment processed successfully',
-      receipt_no: receiptNo,
-      transaction_id: txnId,
-      amount_paid: totalPaid,
-      payment_date: paymentDate
+    await logAudit({
+      userId: req.user.id, userRole: req.user.role, userEmail: req.user.email,
+      action: 'FEE_PAYMENT', entityType: 'student_fee_payments', entityId: payment.id,
+      oldValue: { status: payment.status, amount_paid: payment.amount_paid || 0 }, newValue: { status, amount_paid: newPaid, receipt_no: receiptNo },
+      reason: `${method} payment of ₹${amount}`, ipAddress: req.ip
     });
+    await notifyStudents([payment.student_id], {
+      title: status === 'Paid' ? 'Fees paid in full' : 'Part payment received',
+      message: `₹${amount.toLocaleString('en-IN')} received (receipt ${receiptNo}).${status === 'Partial' ? ` ₹${(payable - newPaid).toLocaleString('en-IN')} still due.` : ''}`,
+      type: 'fee_reminder',
+      link: '/fees'
+    }, { includeGuardians: true });
+
+    res.json({ message: 'Payment recorded', receipt_no: receiptNo, transaction_id: txnId, amount_paid: amount, total_paid: newPaid, outstanding: Math.max(0, payable - newPaid), status, payment_date: paidAt });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -232,9 +215,12 @@ router.put('/override', verifyToken, requirePermission('fees', 'override'), asyn
     if (!existing) return res.status(404).json({ error: 'Fee payment record not found' });
 
     const updates = {};
-    if (fineAmount !== undefined && fineAmount !== null) updates.fine_amount = Number(fineAmount);
-    if (amountDue !== undefined && amountDue !== null) updates.amount_due = Number(amountDue);
-    if (status !== undefined && status !== null) updates.status = status;
+    if (fineAmount !== undefined && fineAmount !== null && fineAmount !== '') { updates.fine_amount = Math.max(0, Number(fineAmount)); updates.fine_waived = true; }
+    if (amountDue !== undefined && amountDue !== null && amountDue !== '') updates.amount_due = Math.max(0, Number(amountDue));
+    if (status) {
+      if (!['Paid', 'Pending', 'Overdue', 'Partial'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
+      updates.status = status;
+    }
 
     if (Object.keys(updates).length > 0) {
       await StudentFeePayment.updateOne({ id: Number(paymentId) }, { $set: updates });
@@ -265,7 +251,7 @@ router.put('/override', verifyToken, requirePermission('fees', 'override'), asyn
 // GET /api/fees/receipt/:receiptNo - Official printable digital receipt
 router.get('/receipt/:receiptNo', verifyToken, requirePermission('fees', 'read'), async (req, res) => {
   try {
-    const sfp = await StudentFeePayment.findOne({ receipt_no: req.params.receiptNo }).lean();
+    const sfp = await StudentFeePayment.findOne({ $or: [{ receipt_no: req.params.receiptNo }, { 'payments.receipt_no': req.params.receiptNo }] }).lean();
     if (!sfp) return res.status(404).json({ error: 'Receipt not found' });
 
     const [fs, student] = await Promise.all([
@@ -324,6 +310,7 @@ router.get('/receipt/:receiptNo', verifyToken, requirePermission('fees', 'read')
 // GET /api/fees/financial-overview - Consolidated financial stats (Admin only)
 router.get('/financial-overview', verifyToken, requireRoles('admin'), async (req, res) => {
   try {
+    await refreshFees();
     const payments = await StudentFeePayment.find({}).lean();
     let total_demand = 0;
     let total_collected = 0;

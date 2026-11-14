@@ -6,6 +6,8 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 3000,
+    // Listen on the LAN too, so students can scan attendance QR codes with their phones
+    host: true,
     proxy: {
       '/api': {
         target: 'http://localhost:5000',

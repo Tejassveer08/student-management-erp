@@ -6,6 +6,8 @@ require('dotenv').config();
 
 // Connect to MongoDB
 const { connectDB } = require('./db/database');
+const { runMigrations } = require('./services/migrations');
+const { ROOT: UPLOADS_ROOT } = require('./services/uploads');
 
 const authRoutes = require('./routes/auth');
 const studentRoutes = require('./routes/students');
@@ -28,8 +30,10 @@ const forumRoutes = require('./routes/forum');
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-app.use(cors());
-app.use(express.json());
+// CORS: same-origin in production (frontend served by this app); set CORS_ORIGIN to allow others
+app.use(cors(process.env.CORS_ORIGIN ? { origin: process.env.CORS_ORIGIN.split(',').map((o) => o.trim()) } : undefined));
+app.use(express.json({ limit: '1mb' }));
+app.set('trust proxy', 'loopback');
 
 // Request logging middleware
 app.use((req, res, next) => {
@@ -43,7 +47,7 @@ app.get('/api/health', (req, res) => {
     status: 'ONLINE',
     project: 'Full Fledged Student Management ERP System',
     institution: 'Guru Tegh Bahadur Institute of Technology (GGSIPU)',
-    version: '1.0.0',
+    version: '1.1.0',
     timestamp: new Date().toISOString()
   });
 });
@@ -67,6 +71,18 @@ app.use('/api/settings', settingsRoutes);
 app.use('/api/societies', societiesRoutes);
 app.use('/api/forum', forumRoutes);
 
+// Uploaded files (random 128-bit names); never rendered as HTML
+app.use('/api/uploads', express.static(UPLOADS_ROOT, {
+  fallthrough: false,
+  setHeaders: (res) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Security-Policy', "default-src 'none'");
+  }
+}));
+
+// Unknown API routes → JSON 404 (instead of the SPA fallback)
+app.use('/api', (req, res) => res.status(404).json({ error: `No API route for ${req.method} ${req.originalUrl}` }));
+
 // Serve frontend static build if present (for single-server production deployment)
 const frontendDist = path.resolve(__dirname, '../../frontend/dist');
 if (fs.existsSync(frontendDist)) {
@@ -80,13 +96,20 @@ if (fs.existsSync(frontendDist)) {
 }
 
 // Error handling fallback
+// eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
-  console.error('Server Uncaught Error:', err);
-  res.status(500).json({ error: err.message || 'Internal Server Error' });
+  const status = err.status || err.statusCode || 500;
+  if (status >= 500) console.error('Server Uncaught Error:', err);
+  res.status(status).json({ error: status >= 500 && process.env.NODE_ENV === 'production' ? 'Internal Server Error' : err.message || 'Internal Server Error' });
 });
 
 connectDB()
-  .then(() => {
+  .then(async () => {
+    try {
+      await runMigrations();
+    } catch (err) {
+      console.error('Start-up maintenance failed (continuing):', err.message);
+    }
     app.listen(PORT, () => {
       console.log(`================================================================`);
       console.log(`🎓 Student Management ERP Backend Server running on port ${PORT}`);

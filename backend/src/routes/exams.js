@@ -7,344 +7,288 @@ const {
   User,
   Course,
   Department,
-  WardLink,
   FacultyClassMap,
   getNextId
 } = require('../db/database');
 const { verifyToken, requirePermission, logAudit } = require('../middleware/authMiddleware');
-const { marksToGradePoint } = require('../services/cgpaCalculator');
+const { resolveStudent, sendError, HttpError } = require('../services/scope');
+const { getPolicy, gradeFor } = require('../services/policy');
+const { recomputeCgpa } = require('../services/academicRecord');
+const { invalidatePredictions } = require('../services/predictions');
+const { notifyStudents } = require('../services/notify');
+const { invalidateMerit } = require('../services/merit');
 
 const router = express.Router();
+const LIMITS = { internal: 25, assignment: 15, external: 60 };
+const isLearner = (req) => req.user.role === 'student' || req.user.role === 'parent';
 
-// GET /api/exams - List all examinations
+// GET /api/exams — examinations (students/parents see their own semester's and declared ones)
 router.get('/', verifyToken, requirePermission('exams', 'read'), async (req, res) => {
   try {
     const exams = await Examination.find({}).sort({ start_date: -1 }).lean();
     res.json(exams);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
-// POST /api/exams - Schedule new exam (Admin only)
+// POST /api/exams — schedule an examination (admin)
 router.post('/', verifyToken, requirePermission('exams', 'create'), async (req, res) => {
   try {
     const { name, semester, academicYear, examType, startDate, endDate } = req.body;
-    if (!name || !semester || !examType || !startDate || !endDate) {
-      return res.status(400).json({ error: 'All exam fields are required' });
-    }
-
+    if (!name || !semester || !examType || !startDate || !endDate) throw new HttpError(400, 'All exam fields are required');
+    if (endDate < startDate) throw new HttpError(400, 'The end date cannot be before the start date');
+    const policy = await getPolicy();
     const id = await getNextId('examinations');
     await Examination.create({
       id,
-      name,
+      name: String(name).trim(),
       semester: Number(semester),
-      academic_year: academicYear || '2025-2026',
+      academic_year: academicYear || policy.academicSession,
       exam_type: examType,
       start_date: startDate,
       end_date: endDate,
       status: 'Scheduled'
     });
-
     await logAudit({
-      userId: req.user.id,
-      userRole: req.user.role,
-      userEmail: req.user.email,
-      action: 'EXAM_SCHEDULE_CREATE',
-      entityType: 'examinations',
-      entityId: id,
-      oldValue: null,
-      newValue: { name, semester, examType, startDate, endDate },
-      reason: 'New examination schedule creation',
-      ipAddress: req.ip
+      userId: req.user.id, userRole: req.user.role, userEmail: req.user.email,
+      action: 'EXAM_SCHEDULE_CREATE', entityType: 'examinations', entityId: id,
+      newValue: { name, semester, examType, startDate, endDate }, reason: 'New examination schedule', ipAddress: req.ip
     });
-
+    const students = await Student.find({ semester: Number(semester), status: 'Active' }, 'id').lean();
+    await notifyStudents(students.map((s) => s.id), {
+      title: `${name} scheduled`,
+      message: `${examType} examination for semester ${semester} runs ${startDate} to ${endDate}.`,
+      type: 'exam_result',
+      link: '/exams'
+    });
     res.status(201).json({ message: 'Exam scheduled successfully', examId: id });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
-// POST /api/exams/:id/publish - Publish final examination results (Admin only)
+// POST /api/exams/:id/publish — declare results: recomputes CGPAs and notifies students and guardians
 router.post('/:id/publish', verifyToken, requirePermission('exams', 'publish_results'), async (req, res) => {
   try {
     const examId = Number(req.params.id);
     const exam = await Examination.findOne({ id: examId }).lean();
-    if (!exam) {
-      return res.status(404).json({ error: 'Examination not found' });
-    }
+    if (!exam) throw new HttpError(404, 'Examination not found');
+    if (exam.status === 'Results_Declared') throw new HttpError(409, 'Results for this examination are already declared');
+    const studentIds = await ExamMark.distinct('student_id', { exam_id: examId });
+    if (!studentIds.length) throw new HttpError(400, 'No marks have been entered for this examination yet');
 
     await Examination.updateOne({ id: examId }, { $set: { status: 'Results_Declared' } });
+    const updated = exam.exam_type === 'Major' ? await recomputeCgpa(studentIds) : 0;
+    invalidatePredictions();
+    invalidateMerit();
 
     await logAudit({
-      userId: req.user.id,
-      userRole: req.user.role,
-      userEmail: req.user.email,
-      action: 'EXAM_RESULTS_PUBLISH',
-      entityType: 'examinations',
-      entityId: examId,
-      oldValue: { status: exam.status },
-      newValue: { status: 'Results_Declared' },
-      reason: 'Official release of semester examination results',
-      ipAddress: req.ip
+      userId: req.user.id, userRole: req.user.role, userEmail: req.user.email,
+      action: 'EXAM_RESULTS_PUBLISH', entityType: 'examinations', entityId: examId,
+      oldValue: { status: exam.status }, newValue: { status: 'Results_Declared', students: studentIds.length, cgpa_recomputed: updated },
+      reason: 'Official release of examination results', ipAddress: req.ip
     });
+    await notifyStudents(studentIds, {
+      title: 'Results declared',
+      message: `Results for "${exam.name}" are out. Open your marksheet to see your grades.`,
+      type: 'exam_result',
+      link: '/exams'
+    }, { includeGuardians: true, guardianPayload: { title: 'Ward results declared', message: `Results for "${exam.name}" have been declared.`, type: 'exam_result', link: '/exams' } });
 
     res.json({
-      message: `Examination "${exam.name}" results officially declared and published!`,
-      examId: exam.id,
-      status: 'Results_Declared'
+      message: `Results for "${exam.name}" declared. ${studentIds.length} students notified${updated ? `, ${updated} CGPAs recalculated` : ''}.`,
+      examId,
+      status: 'Results_Declared',
+      students: studentIds.length,
+      cgpa_recalculated: updated
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
-// GET /api/exams/marks - Fetch marks with DB scoping
+// GET /api/exams/marks — marks register (scoped; students/parents only see declared results)
 router.get('/marks', verifyToken, requirePermission('exams', 'read'), async (req, res) => {
   try {
     const { examId, subjectId } = req.query;
-    let studentId = req.query.studentId;
-
-    if (req.user.role === 'student') {
-      studentId = req.student ? req.student.id : 0;
-    } else if (req.user.role === 'parent') {
-      if (studentId) {
-        const isWard = await WardLink.findOne({ parent_user_id: req.user.id, student_id: Number(studentId) }).lean();
-        if (!isWard) return res.status(403).json({ error: 'Access denied: Not your linked ward.' });
-      } else {
-        const firstWard = await WardLink.findOne({ parent_user_id: req.user.id }).sort({ is_primary: -1 }).lean();
-        studentId = firstWard ? firstWard.student_id : 0;
-      }
-    }
-
     const filter = {};
     if (examId) filter.exam_id = Number(examId);
     if (subjectId) filter.subject_id = Number(subjectId);
-    if (studentId !== undefined && studentId !== '') filter.student_id = Number(studentId);
+
+    if (isLearner(req)) {
+      const st = await resolveStudent(req, req.query.studentId);
+      filter.student_id = st.id;
+      const declared = await Examination.distinct('id', { status: 'Results_Declared' });
+      filter.exam_id = filter.exam_id ? (declared.includes(filter.exam_id) ? filter.exam_id : -1) : { $in: declared };
+    } else if (req.query.studentId) {
+      filter.student_id = Number(req.query.studentId);
+    }
 
     if (req.user.role === 'faculty') {
-      const maps = await FacultyClassMap.find({ faculty_id: req.faculty?.id || 0 }).lean();
-      const allowedSubjectIds = maps.map(m => m.subject_id);
+      const allowed = (req.facultyClassMap || []).map((m) => m.subject_id);
       if (filter.subject_id !== undefined) {
-        if (!allowedSubjectIds.includes(filter.subject_id)) return res.json([]);
+        if (!allowed.includes(filter.subject_id)) return res.json([]);
       } else {
-        filter.subject_id = { $in: allowedSubjectIds };
+        filter.subject_id = { $in: allowed };
       }
+    }
+
+    if (req.query.semester) {
+      const subIds = await Subject.distinct('id', { semester: Number(req.query.semester) });
+      if (filter.subject_id === undefined) filter.subject_id = { $in: subIds };
+      else if (typeof filter.subject_id === 'number') { if (!subIds.includes(filter.subject_id)) return res.json([]); }
+      else filter.subject_id = { $in: filter.subject_id.$in.filter((id) => subIds.includes(id)) };
     }
 
     const marksDocs = await ExamMark.find(filter).lean();
-    if (marksDocs.length === 0) return res.json([]);
-
-    const subjectIds = [...new Set(marksDocs.map(m => m.subject_id))];
-    const examIds = [...new Set(marksDocs.map(m => m.exam_id))];
-    const studentIds = [...new Set(marksDocs.map(m => m.student_id))];
+    if (!marksDocs.length) return res.json([]);
 
     const [subjects, exams, students] = await Promise.all([
-      Subject.find({ id: { $in: subjectIds } }).lean(),
-      Examination.find({ id: { $in: examIds } }).lean(),
-      Student.find({ id: { $in: studentIds } }).lean()
+      Subject.find({ id: { $in: [...new Set(marksDocs.map((m) => m.subject_id))] } }).lean(),
+      Examination.find({ id: { $in: [...new Set(marksDocs.map((m) => m.exam_id))] } }).lean(),
+      Student.find({ id: { $in: [...new Set(marksDocs.map((m) => m.student_id))] } }).lean()
     ]);
+    const users = await User.find({ id: { $in: students.map((s) => s.user_id) } }, 'id full_name').lean();
+    const subMap = Object.fromEntries(subjects.map((s) => [s.id, s]));
+    const examMap = Object.fromEntries(exams.map((e) => [e.id, e]));
+    const stuMap = Object.fromEntries(students.map((s) => [s.id, s]));
+    const userMap = Object.fromEntries(users.map((u) => [u.id, u]));
 
-    const userIds = [...new Set(students.map(s => s.user_id))];
-    const users = await User.find({ id: { $in: userIds } }).lean();
-
-    const subMap = Object.fromEntries(subjects.map(s => [s.id, s]));
-    const examMap = Object.fromEntries(exams.map(e => [e.id, e]));
-    const stuMap = Object.fromEntries(students.map(s => [s.id, s]));
-    const userMap = Object.fromEntries(users.map(u => [u.id, u]));
-
-    const enriched = marksDocs
-      .map(em => {
-        const sub = subMap[em.subject_id];
-        const ex = examMap[em.exam_id];
-        const s = stuMap[em.student_id];
-        const u = s ? userMap[s.user_id] : null;
-        if (!sub || !ex || !s || !u) return null;
-        return {
-          ...em,
-          subject_code: sub.code,
-          subject_name: sub.name,
-          credits: sub.credits,
-          exam_name: ex.name,
-          exam_type: ex.exam_type,
-          exam_status: ex.status,
-          roll_no: s.roll_no,
-          enrollment_no: s.enrollment_no,
-          student_name: u.full_name
-        };
-      })
-      .filter(Boolean)
-      .sort((a, b) => String(a.roll_no).localeCompare(String(b.roll_no)));
-
-    res.json(enriched);
+    res.json(
+      marksDocs
+        .map((em) => {
+          const sub = subMap[em.subject_id];
+          const ex = examMap[em.exam_id];
+          const s = stuMap[em.student_id];
+          const u = s ? userMap[s.user_id] : null;
+          if (!sub || !ex || !s || !u) return null;
+          return {
+            ...em,
+            subject_code: sub.code,
+            subject_name: sub.name,
+            credits: sub.credits,
+            exam_name: ex.name,
+            exam_type: ex.exam_type,
+            exam_status: ex.status,
+            roll_no: s.roll_no,
+            enrollment_no: s.enrollment_no,
+            section: s.section,
+            student_name: u.full_name
+          };
+        })
+        .filter(Boolean)
+        .sort((a, b) => String(a.roll_no).localeCompare(String(b.roll_no)))
+    );
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
-// POST /api/exams/marks - Faculty marks entry with DB Scoping (internal/assignments)
+// POST /api/exams/marks — enter or moderate marks (faculty: own subject & section, before declaration)
 router.post('/marks', verifyToken, requirePermission('exams', 'enter_marks'), async (req, res) => {
   try {
     const { examId, subjectId, studentId, internalAssessment, assignmentScore, externalExam, remarks, reason } = req.body;
+    if (!examId || !subjectId || !studentId) throw new HttpError(400, 'Exam, subject and student are required');
 
-    if (!examId || !subjectId || !studentId) {
-      return res.status(400).json({ error: 'Exam ID, Subject ID, and Student ID are required' });
-    }
+    const [exam, student, subject] = await Promise.all([
+      Examination.findOne({ id: Number(examId) }).lean(),
+      Student.findOne({ id: Number(studentId) }).lean(),
+      Subject.findOne({ id: Number(subjectId) }).lean()
+    ]);
+    if (!exam || !student || !subject) throw new HttpError(404, 'Exam, student or subject not found');
+    if (subject.semester !== exam.semester) throw new HttpError(400, `${subject.code} is not part of the semester ${exam.semester} examination`);
 
     if (req.user.role === 'faculty') {
-      const isMapped = await FacultyClassMap.findOne({
-        faculty_id: req.faculty?.id,
-        subject_id: Number(subjectId)
-      }).lean();
-
-      if (!isMapped) {
-        return res.status(403).json({
-          error: 'Forbidden: You are not assigned to teach or evaluate this subject.'
-        });
-      }
+      const mapped = await FacultyClassMap.findOne({ faculty_id: req.faculty?.id, subject_id: subject.id, section: student.section }).lean();
+      if (!mapped) throw new HttpError(403, 'Forbidden: you do not teach this subject to this student\'s section.');
+      if (exam.status === 'Results_Declared') throw new HttpError(403, 'Results are already declared. Ask the examination cell (admin) to moderate these marks.');
     }
 
-    const internal = Number(internalAssessment || 0);
-    const assignment = Number(assignmentScore || 0);
-    const external = Number(externalExam || 0);
-    const total = Number((internal + assignment + external).toFixed(1));
-    const gradeInfo = marksToGradePoint(total);
-
-    const existing = await ExamMark.findOne({
-      exam_id: Number(examId),
-      subject_id: Number(subjectId),
-      student_id: Number(studentId)
-    }).lean();
-
-    if (existing) {
-      await ExamMark.updateOne(
-        { id: existing.id },
-        {
-          $set: {
-            internal_assessment: internal,
-            assignment_score: assignment,
-            external_exam: external,
-            total_score: total,
-            letter_grade: gradeInfo.grade,
-            grade_points: gradeInfo.gp,
-            remarks: remarks || ''
-          }
-        }
-      );
-    } else {
-      const id = await getNextId('exam_marks');
-      await ExamMark.create({
-        id,
-        exam_id: Number(examId),
-        subject_id: Number(subjectId),
-        student_id: Number(studentId),
-        internal_assessment: internal,
-        assignment_score: assignment,
-        external_exam: external,
-        total_score: total,
-        letter_grade: gradeInfo.grade,
-        grade_points: gradeInfo.gp,
-        remarks: remarks || ''
-      });
+    const vals = { internal: Number(internalAssessment || 0), assignment: Number(assignmentScore || 0), external: Number(externalExam || 0) };
+    for (const [k, v] of Object.entries(vals)) {
+      if (!Number.isFinite(v) || v < 0 || v > LIMITS[k]) throw new HttpError(400, `${k[0].toUpperCase() + k.slice(1)} marks must be between 0 and ${LIMITS[k]}`);
     }
+    const total = Math.round((vals.internal + vals.assignment + vals.external) * 10) / 10;
+    const policy = await getPolicy();
+    const g = gradeFor(total, policy.gradingScale);
 
-    if (req.user.role === 'admin' && existing) {
+    const key = { exam_id: exam.id, subject_id: subject.id, student_id: student.id };
+    const existing = await ExamMark.findOne(key).lean();
+    const set = { internal_assessment: vals.internal, assignment_score: vals.assignment, external_exam: vals.external, total_score: total, letter_grade: g.grade, grade_points: g.gp, remarks: remarks || '' };
+    if (existing) await ExamMark.updateOne({ id: existing.id }, { $set: set });
+    else await ExamMark.create({ id: await getNextId('exam_marks'), ...key, ...set });
+
+    if (existing && (req.user.role === 'admin' || exam.status === 'Results_Declared')) {
       await logAudit({
-        userId: req.user.id,
-        userRole: req.user.role,
-        userEmail: req.user.email,
-        action: 'EXAM_MARKS_MODERATION',
-        entityType: 'exam_marks',
-        entityId: `${examId}_${subjectId}_${studentId}`,
-        oldValue: { internal: existing.internal_assessment, total: existing.total_score, grade: existing.letter_grade },
-        newValue: { internal, total, grade: gradeInfo.grade },
-        reason: reason || 'Administrative marks moderation',
-        ipAddress: req.ip
+        userId: req.user.id, userRole: req.user.role, userEmail: req.user.email,
+        action: 'EXAM_MARKS_MODERATION', entityType: 'exam_marks', entityId: `${exam.id}_${subject.id}_${student.id}`,
+        oldValue: { internal: existing.internal_assessment, assignment: existing.assignment_score, external: existing.external_exam, total: existing.total_score, grade: existing.letter_grade },
+        newValue: { internal: vals.internal, assignment: vals.assignment, external: vals.external, total, grade: g.grade },
+        reason: reason || 'Marks moderation', ipAddress: req.ip
       });
     }
+    if (exam.status === 'Results_Declared' && exam.exam_type === 'Major') await recomputeCgpa([student.id]);
+    invalidatePredictions();
+    invalidateMerit();
 
-    res.json({
-      message: 'Marks recorded successfully',
-      total_score: total,
-      letter_grade: gradeInfo.grade,
-      grade_points: gradeInfo.gp
-    });
+    res.json({ message: 'Marks recorded', total_score: total, letter_grade: g.grade, grade_points: g.gp });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
-// GET /api/exams/report-card/:studentId - Full official marksheet with DB scoping
+// GET /api/exams/report-card/:studentId?semester=&examId= — official marksheet
 router.get('/report-card/:studentId', verifyToken, requirePermission('exams', 'read'), async (req, res) => {
   try {
-    const targetStudentId = Number(req.params.studentId);
-
-    if (req.user.role === 'student') {
-      if (!req.student || req.student.id !== targetStudentId) {
-        return res.status(403).json({ error: 'Access denied: Students can only view their own marksheet.' });
-      }
-    } else if (req.user.role === 'parent') {
-      const isWard = await WardLink.findOne({ parent_user_id: req.user.id, student_id: targetStudentId }).lean();
-      if (!isWard) {
-        return res.status(403).json({ error: 'Access denied: You can only view marksheets of your linked wards.' });
-      }
-    }
-
-    const s = await Student.findOne({ id: targetStudentId }).lean();
-    if (!s) {
-      return res.status(404).json({ error: 'Student not found' });
-    }
-
-    const selectedSemester = req.query.semester ? Number(req.query.semester) : (s.semester || 4);
-
-    const [u, c, d, marksDocs] = await Promise.all([
+    const s = await resolveStudent(req, req.params.studentId);
+    const learner = isLearner(req);
+    const [u, c, d, marksDocs, allExams] = await Promise.all([
       User.findOne({ id: s.user_id }).lean(),
       Course.findOne({ id: s.course_id }).lean(),
       Department.findOne({ id: s.department_id }).lean(),
-      ExamMark.find({ student_id: s.id }).lean()
+      ExamMark.find({ student_id: s.id }).lean(),
+      Examination.find({}).lean()
     ]);
+    const visibleExams = allExams.filter((e) => !learner || e.status === 'Results_Declared');
+    const examMap = Object.fromEntries(visibleExams.map((e) => [e.id, e]));
+    const marks = marksDocs.filter((m) => examMap[m.exam_id]);
+    const subjects = await Subject.find({ id: { $in: [...new Set(marks.map((m) => m.subject_id))] } }).lean();
+    const subMap = Object.fromEntries(subjects.map((x) => [x.id, x]));
 
-    const subjectIds = [...new Set(marksDocs.map(m => m.subject_id))];
-    const examIds = [...new Set(marksDocs.map(m => m.exam_id))];
-    const [subjects, exams] = await Promise.all([
-      Subject.find({ id: { $in: subjectIds } }).lean(),
-      Examination.find({ id: { $in: examIds } }).lean()
-    ]);
+    const semesters = [...new Set(marks.map((m) => subMap[m.subject_id]?.semester).filter(Boolean))].sort((a, b) => a - b);
+    const selectedSemester = req.query.semester ? Number(req.query.semester) : (semesters.includes(s.semester) ? s.semester : semesters[semesters.length - 1] || s.semester);
 
-    const subMap = Object.fromEntries(subjects.map(sub => [sub.id, sub]));
-    const examSet = new Set(exams.map(ex => ex.id));
+    // Exams of this semester the student has marks in; default to the declared end-term, else the latest
+    const semExamIds = [...new Set(marks.filter((m) => subMap[m.subject_id]?.semester === selectedSemester).map((m) => m.exam_id))];
+    const semExams = semExamIds.map((id) => examMap[id]).sort((a, b) => String(b.start_date).localeCompare(String(a.start_date)));
+    const preferred = semExams.find((e) => e.exam_type === 'Major' && e.status === 'Results_Declared') || semExams[0];
+    const selectedExam = req.query.examId ? semExams.find((e) => e.id === Number(req.query.examId)) || preferred : preferred;
 
-    const marksList = marksDocs
-      .filter(em => {
-        const sub = subMap[em.subject_id];
-        return sub && examSet.has(em.exam_id) && sub.semester === selectedSemester;
-      })
-      .map(em => {
-        const sub = subMap[em.subject_id];
-        return {
-          ...em,
-          subject_code: sub.code,
-          subject_name: sub.name,
-          credits: sub.credits,
-          subject_type: sub.type,
-          semester: sub.semester
-        };
-      })
-      .sort((a, b) => String(a.subject_code).localeCompare(String(b.subject_code)));
+    const marksList = selectedExam
+      ? marks
+          .filter((m) => m.exam_id === selectedExam.id && subMap[m.subject_id]?.semester === selectedSemester)
+          .map((m) => {
+            const sub = subMap[m.subject_id];
+            return { ...m, subject_code: sub.code, subject_name: sub.name, credits: sub.credits, subject_type: sub.type, semester: sub.semester };
+          })
+          .sort((a, b) => String(a.subject_code).localeCompare(String(b.subject_code)))
+      : [];
 
-    let totalCredits = 0;
-    let weightedPoints = 0;
-
-    marksList.forEach(m => {
-      totalCredits += m.credits;
-      weightedPoints += (m.grade_points * m.credits);
-    });
-
-    const sgpa = totalCredits > 0 ? Number((weightedPoints / totalCredits).toFixed(2)) : s.current_cgpa;
+    let credits = 0;
+    let points = 0;
+    for (const m of marksList) {
+      credits += m.credits;
+      points += m.grade_points * m.credits;
+    }
+    const sgpa = credits ? Math.round((points / credits) * 100) / 100 : null;
+    const failed = marksList.filter((m) => m.grade_points === 0).length;
 
     res.json({
       selected_semester: selectedSemester,
-      available_semesters: [1, 2, 3, 4, 5, 6],
+      available_semesters: semesters,
+      exams: semExams.map((e) => ({ id: e.id, name: e.name, exam_type: e.exam_type, status: e.status })),
+      selected_exam: selectedExam ? { id: selectedExam.id, name: selectedExam.name, exam_type: selectedExam.exam_type, status: selectedExam.status, academic_year: selectedExam.academic_year } : null,
       institution: {
         name: 'Guru Tegh Bahadur Institute of Technology (GTBIT)',
         affiliate: 'Guru Gobind Singh Indraprastha University (GGSIPU), New Delhi',
@@ -362,15 +306,15 @@ router.get('/report-card/:studentId', verifyToken, requirePermission('exams', 'r
         current_cgpa: s.current_cgpa
       },
       academic_metrics: {
-        semester_credits: totalCredits,
+        semester_credits: credits,
         semester_sgpa: sgpa,
         cumulative_cgpa: s.current_cgpa,
-        status: sgpa >= 5.0 ? 'PASSED' : 'REAPPEAR'
+        status: !marksList.length ? 'NO RESULT' : failed ? `REAPPEAR (${failed})` : selectedExam?.status === 'Results_Declared' ? 'PASSED' : 'PROVISIONAL'
       },
       subjects: marksList
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 

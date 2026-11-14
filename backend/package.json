@@ -1,24 +1,25 @@
 {
   "name": "backend",
   "version": "1.0.0",
-  "description": "",
+  "description": "GTBIT Student Management ERP — REST API (Express + MongoDB)",
   "main": "index.js",
   "scripts": {
     "start": "node src/server.js",
     "dev": "node src/server.js",
-    "seed": "node src/db/seed.js"
+    "seed": "node src/db/seed.js",
+    "test": "node tests/rbac_boundary.test.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
     "bcryptjs": "^3.0.3",
-    "better-sqlite3": "^13.0.3",
     "cors": "^2.8.6",
     "dotenv": "^18.0.4",
     "express": "^5.2.1",
     "groq-sdk": "^1.6.0",
     "jsonwebtoken": "^9.0.3",
-    "mongoose": "^9.12.1"
+    "mongoose": "^9.12.1",
+    "multer": "^2.5.0"
   }
 }

@@ -10,13 +10,20 @@ export function AuthProvider({ children }) {
   const [facultyProfile, setFacultyProfile] = useState(null);
   const [parentProfile, setParentProfile] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [theme, setTheme] = useState(localStorage.getItem('erp_theme') || 'light');
+  const [theme, setTheme] = useState(() => {
+    try {
+      return localStorage.getItem('erp_theme') ||
+        (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+    } catch {
+      return 'light';
+    }
+  });
   const hasLoggedOut = useRef(false);
 
   // Synchronize data-theme and data-role on document element
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
-    localStorage.setItem('erp_theme', theme);
+    try { localStorage.setItem('erp_theme', theme); } catch { /* storage unavailable */ }
   }, [theme]);
 
   useEffect(() => {
@@ -73,7 +80,7 @@ export function AuthProvider({ children }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password })
       });
-    } catch (networkErr) {
+    } catch {
       throw new Error('Backend server is unreachable. Please ensure the backend is running on port 5000.');
     }
 
@@ -101,30 +108,15 @@ export function AuthProvider({ children }) {
     return data;
   };
 
-  const quickSwitchRole = async (roleName, email = null) => {
-    try {
-      const res = await fetch('/api/auth/quick-switch', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ role: roleName, email })
-      });
-
-      if (!res.ok) {
-        console.error('Quick switch response error:', res.status);
-        return;
-      }
-      const data = await res.json().catch(() => null);
-      if (!data) return;
-      localStorage.setItem('erp_token', data.token);
-      setToken(data.token);
-      setUser(data.user);
-      setStudentProfile(data.student);
-      setFacultyProfile(data.faculty);
-      setParentProfile(data.parent);
-      return data;
-    } catch (err) {
-      console.error('Quick switch error:', err);
-    }
+  const changePassword = async (currentPassword, newPassword) => {
+    const res = await fetch('/api/auth/change-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ currentPassword, newPassword }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Could not change password');
+    return data;
   };
 
   const logout = () => {
@@ -148,11 +140,25 @@ export function AuthProvider({ children }) {
   };
 
   const roleMeta = {
-    admin: { label: 'Admin (Dean & HOD)', accent: '#4f46e5', badge: 'Dean & Administration' },
-    faculty: { label: 'Faculty Console', accent: '#0d9488', badge: 'Professor & Guide' },
-    parent: { label: 'Parent Portal', accent: '#d97706', badge: 'Guardian / Ward Monitor' },
-    student: { label: 'Student Console', accent: '#2563eb', badge: 'Undergraduate Scholar' }
-  }[user?.role?.toLowerCase() || 'student'] || { label: 'User', accent: '#4f46e5', badge: 'ERP Member' };
+    admin: { label: 'Administration', title: 'Dean & Administration', badge: 'Admin' },
+    faculty: { label: 'Faculty', title: 'Faculty Console', badge: 'Faculty' },
+    parent: { label: 'Guardian', title: 'Parent Portal', badge: 'Parent' },
+    student: { label: 'Student', title: 'Student Console', badge: 'Student' }
+  }[user?.role?.toLowerCase() || 'student'] || { label: 'Member', title: 'ERP', badge: 'Member' };
+
+  const refreshProfile = async () => {
+    if (!token) return;
+    try {
+      const res = await fetch('/api/auth/me', { headers: { Authorization: `Bearer ${token}` } });
+      if (res.ok) {
+        const data = await res.json();
+        setUser(data.user);
+        setStudentProfile(data.student);
+        setFacultyProfile(data.faculty);
+        setParentProfile(data.parent);
+      }
+    } catch { /* ignore */ }
+  };
 
   return (
     <AuthContext.Provider value={{
@@ -166,9 +172,10 @@ export function AuthProvider({ children }) {
       toggleTheme,
       login,
       logout,
-      quickSwitchRole,
+      changePassword,
       hasPermission,
       roleMeta,
+      refreshProfile,
       permissions
     }}>
       {children}

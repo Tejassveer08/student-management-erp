@@ -1119,11 +1119,12 @@ async function seedDatabase() {
       setting_key: 'grading_scale',
       setting_value: JSON.stringify({
         O: { min: 90, points: 10, label: 'Outstanding' },
-        'A+': { min: 80, points: 9, label: 'Excellent' },
-        A: { min: 70, points: 8, label: 'Very Good' },
-        'B+': { min: 60, points: 7, label: 'Good' },
+        'A+': { min: 75, points: 9, label: 'Excellent' },
+        A: { min: 65, points: 8, label: 'Very Good' },
+        'B+': { min: 55, points: 7, label: 'Good' },
         B: { min: 50, points: 6, label: 'Above Average' },
-        C: { min: 40, points: 5, label: 'Pass' },
+        C: { min: 45, points: 5, label: 'Average' },
+        P: { min: 40, points: 4, label: 'Pass' },
         F: { min: 0, points: 0, label: 'Fail' }
       }),
       description: 'Official GGSIPU 10-point absolute letter grading system',

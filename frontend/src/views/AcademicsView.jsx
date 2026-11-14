@@ -1,193 +1,198 @@
-import React, { useState, useEffect } from 'react';
+import React, { useMemo, useState } from 'react';
+import { CalendarDays, BookOpen, MapPin, User, ChevronDown, FlaskConical, GraduationCap, Layers, Clock } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import {
-  Calendar,
-  BookOpen,
-  Clock,
-  Layers,
-  MapPin,
-  Plus,
-  Users
-} from 'lucide-react';
+import { asList } from '../lib/api';
+import { useLoader, useNow } from '../lib/hooks';
+import { SECTIONS, SEMESTERS } from '../config/campus';
+import { PageHeader, Card, Badge, Progress, Tabs, EmptyState, ErrorState, PageSkeleton, Segmented, Stat, cx } from '../components/ui';
+
+const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+const diffTone = (d) => (d >= 0.65 ? 'danger' : d >= 0.45 ? 'warning' : 'success');
+const diffLabel = (d) => (d >= 0.65 ? 'Hard' : d >= 0.45 ? 'Moderate' : 'Easy');
 
 export default function AcademicsView() {
-  const { user, token } = useAuth();
-  const [subjects, setSubjects] = useState([]);
-  const [timetable, setTimetable] = useState([]);
-  const [activeDay, setActiveDay] = useState('Monday');
-  const [loading, setLoading] = useState(true);
+  const { studentProfile } = useAuth();
+  const [sem, setSem] = useState(studentProfile?.semester || 4);
+  const [section, setSection] = useState(studentProfile?.section || 'CSE-2');
+  const [tab, setTab] = useState('timetable');
+  const [layout, setLayout] = useState('grid');
+  const [openSub, setOpenSub] = useState(null);
+  const now = useNow(60000);
 
-  const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+  const { data, loading, error, hardReload } = useLoader((api) => Promise.all([
+    api(`/academics/subjects?semester=${sem}`),
+    api(`/academics/timetable?semester=${sem}&section=${encodeURIComponent(section)}`),
+    api('/academics/courses').catch(() => []),
+  ]), [sem, section]);
 
-  useEffect(() => {
-    fetchAcademics();
-  }, [token]);
+  const subjects = asList(data?.[0]);
+  const slots = asList(data?.[1]);
+  const courses = asList(data?.[2]);
+  const course = courses.find((c) => c.code === `BTECH-${section.split('-')[0]}`);
+  const deptSubjects = course ? subjects.filter((s) => s.course_id === course.id) : [];
+  const catalog = deptSubjects.length ? deptSubjects : subjects;
 
-  async function fetchAcademics() {
-    if (!token) return;
-    setLoading(true);
-
-    try {
-      const [subRes, ttRes] = await Promise.all([
-        fetch('/api/academics/subjects?semester=4', { headers: { 'Authorization': `Bearer ${token}` } }),
-        fetch('/api/academics/timetable?semester=4&section=CSE-2', { headers: { 'Authorization': `Bearer ${token}` } })
-      ]);
-
-      if (subRes.ok) setSubjects(await subRes.json());
-      if (ttRes.ok) setTimetable(await ttRes.json());
-    } catch (err) {
-      console.error('Error fetching academic data:', err);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  const filteredSlots = timetable.filter(t => t.day_of_week === activeDay);
+  const times = useMemo(() => [...new Set(slots.map((s) => `${s.start_time}|${s.end_time}`))].sort(), [slots]);
+  const cell = (day, t) => slots.find((s) => s.day_of_week === day && `${s.start_time}|${s.end_time}` === t);
+  const today = now.toLocaleDateString('en-US', { weekday: 'long' });
+  const hm = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+  const credits = catalog.reduce((a, s) => a + (s.credits || 0), 0);
+  const labs = catalog.filter((s) => s.type && s.type !== 'Theory').length;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-      {/* Banner */}
-      <div className="glass-panel" style={{
-        padding: '1.5rem 2rem',
-        background: 'linear-gradient(135deg, rgba(6, 182, 212, 0.12) 0%, rgba(79, 70, 229, 0.08) 100%)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        flexWrap: 'wrap',
-        gap: '1rem'
-      }}>
-        <div>
-          <div className="badge badge-primary" style={{ marginBottom: '0.4rem' }}>
-            Academic Curriculum & Timetable (Module 2.E)
-          </div>
-          <h1 style={{ fontSize: '1.75rem' }}>Curriculum & Weekly Class Schedule</h1>
-          <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginTop: '0.2rem' }}>
-            Department of Computer Science & Engineering • Section CSE-2 • Semester 4
-          </p>
-        </div>
+    <>
+      <PageHeader
+        eyebrow="Curriculum"
+        title={<>Courses & <em>timetable</em></>}
+        description="The weekly schedule for any section and the semester’s subject catalogue, with historical pass rates and difficulty."
+        actions={<div className="row gap-8">
+          <select className="select" style={{ width: 130 }} value={sem} onChange={(e) => setSem(Number(e.target.value))} aria-label="Semester">{SEMESTERS.map((s) => <option key={s} value={s}>Semester {s}</option>)}</select>
+          <select className="select" style={{ width: 120 }} value={section} onChange={(e) => setSection(e.target.value)} aria-label="Section">{SECTIONS.map((s) => <option key={s}>{s}</option>)}</select>
+        </div>}
+      />
 
-        <div style={{ display: 'flex', gap: '0.5rem' }}>
-          <span className="badge badge-info">Course: B.Tech CSE</span>
-          <span className="badge badge-success">Academic Year 2025-2026</span>
-        </div>
-      </div>
-
-      {/* Interactive Timetable Tabs & Schedule Grid */}
-      <div className="glass-panel" style={{ padding: '1.5rem' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '0.75rem' }}>
-          <div>
-            <h3 style={{ fontSize: '1.15rem' }}>Weekly Interactive Schedule</h3>
-            <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-              Select a weekday to view scheduled lectures, labs, faculty and room allocations.
-            </p>
+      {loading ? <PageSkeleton /> : error ? <ErrorState error={error} onRetry={hardReload} /> : (
+        <>
+          <div className="grid-4" style={{ marginBottom: 16 }}>
+            <Stat label="Weekly lectures" value={slots.length} icon={CalendarDays} tone="accent" hint={`${section} · semester ${sem}`} />
+            <Stat label="Subjects" value={catalog.length} icon={BookOpen} tone="info" hint={`${labs} practical / lab`} />
+            <Stat label="Credits" value={credits} icon={Layers} tone="violet" />
+            <Stat label="Programmes" value={courses.length || 5} icon={GraduationCap} tone="success" hint="CSE · IT · ECE · AI-ML · AI-DS" />
           </div>
 
-          {/* Weekday Switcher */}
-          <div style={{ display: 'flex', gap: '0.35rem', background: 'var(--bg-surface-subtle)', padding: '0.25rem', borderRadius: 'var(--radius-md)' }}>
-            {days.map(d => (
-              <button
-                key={d}
-                onClick={() => setActiveDay(d)}
-                style={{
-                  padding: '0.4rem 0.85rem',
-                  borderRadius: 'var(--radius-sm)',
-                  border: 'none',
-                  fontSize: '0.8rem',
-                  fontWeight: activeDay === d ? 700 : 500,
-                  cursor: 'pointer',
-                  background: activeDay === d ? 'var(--primary)' : 'transparent',
-                  color: activeDay === d ? '#ffffff' : 'var(--text-secondary)',
-                  transition: 'all 0.15s ease'
-                }}
-              >
-                {d}
-              </button>
-            ))}
-          </div>
-        </div>
+          <Tabs value={tab} onChange={setTab} tabs={[
+            { id: 'timetable', label: 'Weekly timetable', icon: CalendarDays, count: slots.length },
+            { id: 'catalog', label: 'Subject catalogue', icon: BookOpen, count: catalog.length },
+            { id: 'programmes', label: 'Programmes', icon: GraduationCap, count: courses.length },
+          ]} />
 
-        {/* Timetable Slot Cards */}
-        {filteredSlots.length === 0 ? (
-          <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>
-            No lectures scheduled for {activeDay}.
-          </div>
-        ) : (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1rem' }}>
-            {filteredSlots.map(slot => (
-              <div key={slot.id} style={{
-                padding: '1.15rem',
-                borderRadius: 'var(--radius-md)',
-                background: 'var(--bg-surface-subtle)',
-                border: '1px solid var(--border-subtle)',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '0.65rem'
-              }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span className="badge badge-primary" style={{ fontFamily: 'var(--font-mono)' }}>
-                    {slot.start_time} - {slot.end_time}
-                  </span>
-                  <span className="badge badge-info">{slot.subject_code}</span>
+          {tab === 'timetable' && (
+            <Card flush title={`${section} · Semester ${sem}`} subtitle="Monday to Friday" icon={CalendarDays}
+              actions={<Segmented value={layout} onChange={setLayout} options={[{ value: 'grid', label: 'Grid' }, { value: 'list', label: 'By day' }]} />}>
+              {slots.length === 0 ? <EmptyState icon={CalendarDays} title="No timetable published" description="This section has no scheduled lectures for the selected semester." /> : layout === 'grid' ? (
+                <div className="table-wrap">
+                  <table className="tbl" style={{ tableLayout: 'fixed', minWidth: 820 }}>
+                    <thead>
+                      <tr>
+                        <th style={{ width: 96 }}>Time</th>
+                        {DAYS.map((d) => <th key={d} style={d === today ? { color: 'var(--accent)' } : undefined}>{d}{d === today && ' · today'}</th>)}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {times.map((t) => {
+                        const [st, en] = t.split('|');
+                        return (
+                          <tr key={t}>
+                            <td className="mono xs muted" style={{ verticalAlign: 'top' }}>{st}<br />{en}</td>
+                            {DAYS.map((d) => {
+                              const s = cell(d, t);
+                              const live = s && d === today && hm >= st && hm < en;
+                              return (
+                                <td key={d} style={{ verticalAlign: 'top', padding: 6 }}>
+                                  {s ? (
+                                    <div className={cx('tt-slot', s.subject_type && s.subject_type !== 'Theory' && 'lab')} style={live ? { background: 'var(--accent-soft)', borderColor: 'var(--accent-line)' } : undefined}>
+                                      <div className="row-between"><span className="mono xs strong">{s.subject_code}</span>{live && <span className="dot live" />}</div>
+                                      <div className="small strong clamp-2" style={{ marginTop: 2 }}>{s.subject_name}</div>
+                                      <div className="xs muted truncate" style={{ marginTop: 4 }}>{s.faculty_name}</div>
+                                      <div className="xs faint">{s.room_no}</div>
+                                    </div>
+                                  ) : <div style={{ height: '100%', minHeight: 60, background: 'repeating-linear-gradient(-45deg, transparent 0 6px, var(--sunken) 6px 7px)' }} />}
+                                </td>
+                              );
+                            })}
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
                 </div>
-
-                <div>
-                  <h4 style={{ fontSize: '0.95rem', fontWeight: 700 }}>{slot.subject_name}</h4>
-                  <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginTop: '0.25rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                    <Users size={14} /> Faculty: {slot.faculty_name}
-                  </div>
-                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.15rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                    <MapPin size={14} /> Room / Venue: <strong>{slot.room_no}</strong>
+              ) : (
+                <div className="card-bd">
+                  <div className="grid-auto" style={{ '--min': '220px' }}>
+                    {DAYS.map((d) => {
+                      const xs = slots.filter((s) => s.day_of_week === d).sort((a, b) => a.start_time.localeCompare(b.start_time));
+                      return (
+                        <div key={d} className="tile" style={d === today ? { borderColor: 'var(--accent-line)' } : undefined}>
+                          <div className="row-between" style={{ marginBottom: 10 }}><span className="strong">{d}</span><Badge tone={d === today ? 'accent' : 'neutral'}>{xs.length}</Badge></div>
+                          <div className="timeline">
+                            {xs.length === 0 ? <span className="xs faint">No lectures</span> : xs.map((s) => (
+                              <div key={s.id} className="tl-item">
+                                <div className="mono xs muted">{s.start_time} – {s.end_time}</div>
+                                <div className="small strong">{s.subject_name}</div>
+                                <div className="xs muted row gap-4"><User size={11} />{s.faculty_name} · <MapPin size={11} />{s.room_no}</div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+              )}
+            </Card>
+          )}
 
-      {/* Semester 4 Subjects Curriculum Matrix */}
-      <div className="glass-panel" style={{ padding: '1.5rem' }}>
-        <h3 style={{ fontSize: '1.15rem', marginBottom: '1rem' }}>Semester 4 Subject Catalog & Difficulty Ratings</h3>
-        <div className="table-container">
-          <table className="erp-table">
-            <thead>
-              <tr>
-                <th>Code</th>
-                <th>Subject Name</th>
-                <th>Credits</th>
-                <th>Type</th>
-                <th>Assigned Faculty</th>
-                <th>Difficulty Index</th>
-                <th>Historical Pass %</th>
-              </tr>
-            </thead>
-            <tbody>
-              {subjects.map(s => (
-                <tr key={s.id}>
-                  <td style={{ fontWeight: 700, fontFamily: 'var(--font-mono)' }}>{s.code}</td>
-                  <td style={{ fontWeight: 600 }}>{s.name}</td>
-                  <td>{s.credits} Credits</td>
-                  <td>
-                    <span className={`badge badge-${s.type === 'Theory' ? 'primary' : 'warning'}`}>
-                      {s.type}
-                    </span>
-                  </td>
-                  <td>{s.faculty_name || 'Prof. CSE'}</td>
-                  <td>
-                    <span style={{
-                      fontWeight: 700,
-                      color: s.difficulty_index >= 0.65 ? 'var(--danger)' : (s.difficulty_index >= 0.45 ? 'var(--warning)' : 'var(--success)')
-                    }}>
-                      {s.difficulty_index} ({s.difficulty_index >= 0.65 ? 'Hard' : (s.difficulty_index >= 0.45 ? 'Moderate' : 'Easy')})
-                    </span>
-                  </td>
-                  <td style={{ fontWeight: 600 }}>{s.historical_pass_pct}%</td>
-                </tr>
+          {tab === 'catalog' && (
+            <Card flush>
+              {catalog.length === 0 ? <EmptyState title="No subjects for this semester" /> : (
+                <div className="list">
+                  {catalog.map((s) => {
+                    const open = openSub === s.id;
+                    return (
+                      <div key={s.id} style={{ borderTop: '1px solid var(--line)' }}>
+                        <button className="list-item clickable" style={{ width: '100%', border: 0, background: 'none', textAlign: 'left', borderTop: 0 }} onClick={() => setOpenSub(open ? null : s.id)} aria-expanded={open}>
+                          <span className="stat-icon" style={{ background: s.type === 'Theory' ? 'var(--accent-soft)' : 'var(--saffron-soft)', color: s.type === 'Theory' ? 'var(--accent)' : '#b7791f' }}>
+                            {s.type === 'Theory' ? <BookOpen size={15} /> : <FlaskConical size={15} />}
+                          </span>
+                          <div className="grow">
+                            <div className="list-title">{s.name}</div>
+                            <div className="list-meta"><span className="mono">{s.code}</span> · {s.credits} credits · {s.faculty_name || 'Unassigned'}</div>
+                          </div>
+                          <div className="desktop-only" style={{ width: 160 }}>
+                            <div className="row-between xs"><span className="muted">Pass rate</span><span className="mono">{s.historical_pass_pct}%</span></div>
+                            <Progress value={s.historical_pass_pct} tone={s.historical_pass_pct < 70 ? 'warning' : 'success'} style={{ marginTop: 4 }} />
+                          </div>
+                          <Badge tone={diffTone(s.difficulty_index)}>{diffLabel(s.difficulty_index)} · {Math.round((s.difficulty_index || 0) * 100)}</Badge>
+                          <ChevronDown size={16} className="muted" style={{ transform: open ? 'rotate(180deg)' : 'none', transition: 'transform .2s' }} />
+                        </button>
+                        {open && (
+                          <div style={{ padding: '0 18px 18px 60px' }} className="rise">
+                            <div className="grid-3" style={{ gap: 10, marginBottom: 12 }}>
+                              <div className="tile-sm"><div className="xs muted">Historical average</div><div className="strong mono">{s.historical_avg_marks} / 100</div></div>
+                              <div className="tile-sm"><div className="xs muted">Pass rate</div><div className="strong mono">{s.historical_pass_pct}%</div></div>
+                              <div className="tile-sm"><div className="xs muted">Type</div><div className="strong">{s.type}</div></div>
+                            </div>
+                            <div className="eyebrow" style={{ marginBottom: 6 }}>Syllabus outline</div>
+                            {s.syllabus_outline ? (
+                              <ol className="small ink-2" style={{ paddingLeft: 18, lineHeight: 1.7 }}>
+                                {s.syllabus_outline.split(/,\s*(?=Unit)/).map((u, i) => <li key={i}>{u.replace(/^Unit \d+:\s*/, '')}</li>)}
+                              </ol>
+                            ) : <div className="small faint">Not published yet.</div>}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </Card>
+          )}
+
+          {tab === 'programmes' && (
+            <div className="grid-auto" style={{ '--min': '280px' }}>
+              {courses.sort((a, b) => a.id - b.id).map((c) => (
+                <Card key={c.id}>
+                  <Badge tone="accent">{c.department_code}</Badge>
+                  <div className="serif" style={{ fontSize: 22, lineHeight: 1.2, marginTop: 10 }}>{c.name}</div>
+                  <div className="small muted" style={{ marginTop: 6 }}>{c.department_name}</div>
+                  <div className="divider" style={{ margin: '14px 0 10px' }} />
+                  <div className="row-between xs muted"><span className="mono">{c.code}</span><span className="row gap-4"><Clock size={12} /> {c.duration_semesters} semesters</span></div>
+                </Card>
               ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
+            </div>
+          )}
+        </>
+      )}
+    </>
   );
 }

@@ -56,7 +56,7 @@ async function runTests() {
   async function assertCase(description, promise, expectedStatus, expectedCondition = null) {
     try {
       const res = await promise;
-      const statusMatch = res.status === expectedStatus;
+      const statusMatch = Array.isArray(expectedStatus) ? expectedStatus.includes(res.status) : res.status === expectedStatus;
       let conditionMatch = true;
 
       let body = {};
@@ -105,12 +105,12 @@ async function runTests() {
   );
 
   await assertCase(
-    'Admin should publish final exam results',
+    'Admin should publish final exam results (409 if already declared)',
     fetch(`${BASE_URL}/exams/${sampleExamRecord.id}/publish`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${adminToken}`, 'Content-Type': 'application/json' }
     }),
-    200
+    [200, 409]
   );
 
   console.log('\n--- 2. FACULTY ROLE PERMISSION BOUNDARIES ---');
@@ -252,6 +252,26 @@ async function runTests() {
     fetch(`${BASE_URL}/settings`, { headers: { Authorization: `Bearer ${studentToken}` } }),
     403
   );
+
+  console.log('\n--- SECURITY REGRESSIONS ---');
+  const other = studentAmanRecord.id;
+  const studentAuth = { Authorization: `Bearer ${studentToken}` };
+  const json = { 'Content-Type': 'application/json' };
+  await assertCase('Unauthenticated quick-switch backdoor is gone',
+    fetch(`${BASE_URL}/auth/quick-switch`, { method: 'POST', headers: json, body: JSON.stringify({ role: 'admin' }) }), 404);
+  await assertCase('Unauthenticated password reset is gone',
+    fetch(`${BASE_URL}/auth/reset-password`, { method: 'POST', headers: json, body: JSON.stringify({ email: 'admin@gtbit.ac.in', newPassword: 'x' }) }), 404);
+  await assertCase('Student should be BLOCKED from another student\'s CGPA forecast',
+    fetch(`${BASE_URL}/cgpa/analysis/${other}`, { headers: studentAuth }), 403);
+  await assertCase('Student should be BLOCKED from the institution-wide risk cohort',
+    fetch(`${BASE_URL}/cgpa/at-risk-cohort`, { headers: studentAuth }), 403);
+  await assertCase('Parent should be BLOCKED from another student\'s library loans',
+    fetch(`${BASE_URL}/library/my-issues?studentId=${other}`, { headers: { Authorization: `Bearer ${parentToken}` } }), 403);
+  await assertCase('Student attendance export only contains their own rows',
+    fetch(`${BASE_URL}/attendance/export?semester=4&section=CSE-2`, { headers: studentAuth }), 200,
+    (b) => new Set(b.records.map((r) => r.roll_no)).size === 1);
+  await assertCase('Password change requires the current password',
+    fetch(`${BASE_URL}/auth/change-password`, { method: 'POST', headers: { ...studentAuth, ...json }, body: JSON.stringify({ currentPassword: 'wrong-password', newPassword: 'NewPass123' }) }), 400);
 
   console.log('\n=================================================================');
   console.log(`🏁 RBAC TEST RESULTS: ${passCount} PASSED, ${failCount} FAILED (Total: ${passCount + failCount})`);

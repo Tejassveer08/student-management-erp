@@ -1,567 +1,329 @@
-import React, { useState, useEffect } from 'react';
-import { useAuth } from '../context/AuthContext';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  TrendingUp,
-  AlertTriangle,
-  Sliders,
-  CheckCircle2,
-  HelpCircle,
-  Sparkles,
-  BarChart3,
-  RotateCcw,
-  Zap,
-  Info,
-  ShieldCheck,
-  Award,
-  Layers
+  TrendingUp, RotateCcw, AlertTriangle, ShieldCheck, Sliders, Cpu, ArrowRight, Sigma, Target, Gauge, Users,
 } from 'lucide-react';
 import {
-  ResponsiveContainer,
-  AreaChart,
-  Area,
-  Line,
-  XAxis,
-  YAxis,
-  Tooltip,
-  CartesianGrid,
-  Legend,
-  ReferenceLine,
-  BarChart,
-  Bar
+  ComposedChart, Bar, Line, ErrorBar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, ReferenceLine,
+  ScatterChart, Scatter, ZAxis, Cell,
 } from 'recharts';
+import { useAuth } from '../context/AuthContext';
+import { useApi, asList } from '../lib/api';
+import { useLoader, settle, useChartColors, axisProps, useDebounced, useMySections } from '../lib/hooks';
+import { SECTIONS } from '../config/campus';
+import { gradeClass, pct } from '../lib/format';
+import {
+  PageHeader, Card, Badge, Ring, EmptyState, ErrorState, PageSkeleton, Callout, ChartTip, cx,
+} from '../components/ui';
 
 export default function CGPAProbabilityView() {
-  const { user, token } = useAuth();
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [whatIfAdjustments, setWhatIfAdjustments] = useState({});
-  const [simulatedData, setSimulatedData] = useState(null);
-  const [isSimulating, setIsSimulating] = useState(false);
-
-  // Student selection for Admin/Faculty
-  const [students, setStudents] = useState([]);
-  const [selectedStudentId, setSelectedStudentId] = useState('');
-
+  const { user } = useAuth();
+  const staff = user?.role === 'admin' || user?.role === 'faculty';
+  const [section, setSection] = useState('CSE-2');
+  const [studentId, setStudentId] = useState(staff ? null : 'me');
+  const { sections } = useMySections(SECTIONS);
   useEffect(() => {
-    if (user?.role === 'admin' || user?.role === 'faculty') {
-      fetch('/api/students?semester=4', {
-        headers: { 'Authorization': `Bearer ${token}` }
-      })
-        .then(r => r.json())
-        .then(st => {
-          setStudents(st);
-          if (st.length > 0 && !selectedStudentId) {
-            setSelectedStudentId(st[0].id);
-          }
-        })
-        .catch(console.error);
-    }
-  }, [user?.role, token]);
+    if (staff && sections.length && !sections.includes(section)) { setSection(sections[0]); setStudentId(null); }
+  }, [staff, sections, section]);
 
+  const roster = useLoader((api) => (staff ? api(`/students?section=${encodeURIComponent(section)}`) : Promise.resolve([])), [staff, section]);
+  const students = asList(roster.data);
   useEffect(() => {
-    fetchAnalysis();
-  }, [token, selectedStudentId, user?.role]);
-
-  async function fetchAnalysis() {
-    if (!token) return;
-    setLoading(true);
-
-    try {
-      const targetId = (user?.role === 'admin' || user?.role === 'faculty') && selectedStudentId
-        ? selectedStudentId
-        : 'me';
-
-      const res = await fetch(`/api/cgpa/analysis/${targetId}`, {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-
-      if (res.ok) {
-        const resData = await res.json();
-        setData(resData);
-        setSimulatedData(resData);
-        setWhatIfAdjustments({});
-      }
-    } catch (err) {
-      console.error('Error fetching CGPA probability analysis:', err);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  // Handle What-If slider adjustments (Live client-side simulator with optional API sync)
-  const handleSliderChange = async (subjectId, value) => {
-    const updated = {
-      ...whatIfAdjustments,
-      [subjectId]: Number(value)
-    };
-    setWhatIfAdjustments(updated);
-
-    // Call simulate API for exact mathematical precision
-    setIsSimulating(true);
-    try {
-      const targetId = (user?.role === 'admin' || user?.role === 'faculty') && selectedStudentId
-        ? selectedStudentId
-        : 'me';
-
-      const res = await fetch('/api/cgpa/simulate', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          studentId: targetId,
-          whatIfAdjustments: updated
-        })
-      });
-
-      if (res.ok) {
-        const simRes = await res.json();
-        setSimulatedData(simRes);
-      }
-    } catch (err) {
-      console.error('Simulation error:', err);
-    } finally {
-      setIsSimulating(false);
-    }
-  };
-
-  const resetSimulation = () => {
-    setWhatIfAdjustments({});
-    setSimulatedData(data);
-  };
-
-  if (loading) {
-    return (
-      <div style={{ padding: '3.5rem', textAlign: 'center', color: 'var(--text-muted)' }}>
-        <div style={{
-          width: '48px',
-          height: '48px',
-          margin: '0 auto 1.25rem auto',
-          borderRadius: '50%',
-          border: '3px solid var(--border-subtle)',
-          borderTopColor: 'var(--role-accent)',
-          animation: 'spin 0.8s linear infinite'
-        }}></div>
-        <div style={{ fontSize: '1.35rem', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '0.4rem' }}>
-          Computing Multi-Factor Statistical Forecast...
-        </div>
-        <div style={{ fontSize: '0.85rem' }}>Evaluating historical subject difficulty, continuous internal scores, and live attendance metrics...</div>
-      </div>
-    );
-  }
-
-  const currentDisplay = simulatedData || data;
-
-  // Build Confidence Band trajectory data for Recharts Area/Line Chart
-  const priorCGPA = currentDisplay?.current_cgpa || 8.78;
-  const predSGPA = currentDisplay?.predicted_sgpa || 8.94;
-  const sgpaLower = currentDisplay?.sgpa_range?.[0] || 8.65;
-  const sgpaUpper = currentDisplay?.sgpa_range?.[1] || 8.95;
-
-  const trajectoryData = [
-    { semester: 'Sem 1', actual: 8.50, projected: 8.50, lowerBand: 8.50, upperBand: 8.50 },
-    { semester: 'Sem 2', actual: 8.70, projected: 8.70, lowerBand: 8.70, upperBand: 8.70 },
-    { semester: 'Sem 3', actual: priorCGPA, projected: priorCGPA, lowerBand: priorCGPA, upperBand: priorCGPA },
-    {
-      semester: 'Sem 4 (Forecast)',
-      actual: null,
-      projected: predSGPA,
-      lowerBand: sgpaLower,
-      upperBand: sgpaUpper
-    }
-  ];
-
-  // Subject difficulty vs projected score comparison data
-  const subjectCompareData = (currentDisplay?.subjects || []).map(s => ({
-    name: s.subject_code,
-    fullName: s.subject_name,
-    projectedScore: s.predicted_score,
-    difficultyPct: Math.round(s.difficulty_index * 100),
-    attendance: s.attendance_pct
-  }));
+    if (staff && students.length && !students.find((s) => String(s.id) === String(studentId))) setStudentId(students[0].id);
+  }, [staff, students, studentId]);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-      {/* Banner */}
-      <div className="glass-panel" style={{
-        padding: '1.75rem 2rem',
-        background: 'linear-gradient(135deg, rgba(79, 70, 229, 0.14) 0%, rgba(139, 92, 246, 0.08) 100%)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        flexWrap: 'wrap',
-        gap: '1rem',
-        borderLeft: '5px solid var(--role-accent)',
-        boxShadow: '0 4px 20px var(--role-accent-glow)'
-      }}>
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.4rem' }}>
-            <span className="badge badge-primary" style={{ gap: '0.35rem' }}>
-              <Sparkles size={13} /> Flagship Core Innovation (Module 2.G)
-            </span>
-            {Object.keys(whatIfAdjustments).length > 0 && (
-              <span className="badge badge-warning">
-                Live Simulation Active ({Object.keys(whatIfAdjustments).length} tweaks)
-              </span>
-            )}
-          </div>
-          <h1 style={{ fontSize: '1.75rem', fontWeight: 800 }}>CGPA Probability & Predictive Engine</h1>
-          <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginTop: '0.2rem' }}>
-            Estimates probable semester CGPA before results are declared using subject difficulty indices, internal marks, and live attendance.
-          </p>
-        </div>
-
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
-          <span className="badge badge-info" style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem' }}>
-            Engine: {currentDisplay?.engine || 'Statistical Regression v2.4'}
-          </span>
-
-          <button onClick={resetSimulation} className="btn btn-secondary btn-sm" style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-            <RotateCcw size={15} /> Reset Sliders
-          </button>
-        </div>
-      </div>
-
-      {/* Admin / Faculty Student Selector */}
-      {(user?.role === 'admin' || user?.role === 'faculty') && (
-        <div className="glass-panel" style={{ padding: '0.85rem 1.5rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '1rem' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-            <span style={{ fontSize: '0.85rem', fontWeight: 700 }}>Inspect Student Academic Risk Model:</span>
-            <select
-              value={selectedStudentId}
-              onChange={(e) => setSelectedStudentId(e.target.value)}
-              className="form-select"
-              style={{ width: '280px', padding: '0.4rem 0.75rem', borderRadius: 'var(--radius-sm)' }}
-            >
-              {students.map(s => (
-                <option key={s.id} value={s.id}>
-                  {s.full_name} ({s.roll_no}) - CGPA: {s.current_cgpa}
-                </option>
-              ))}
+    <>
+      <PageHeader
+        eyebrow="Flagship module · Predictive analytics"
+        title={<>CGPA <em>probability</em></>}
+        description="Forecasts this semester’s SGPA and CGPA before results are declared — weighing historical subject difficulty, continuous assessment and live attendance — and lets you test what-if scenarios."
+        actions={staff && (
+          <div className="row gap-8 wrap">
+            <select className="select" style={{ width: 120 }} value={section} onChange={(e) => { setSection(e.target.value); setStudentId(null); }} aria-label="Section">
+              {sections.map((s) => <option key={s}>{s}</option>)}
+            </select>
+            <select className="select" style={{ width: 280 }} value={studentId || ''} onChange={(e) => setStudentId(Number(e.target.value))} aria-label="Student" disabled={roster.loading}>
+              {students.map((s) => <option key={s.id} value={s.id}>{s.full_name} · {s.roll_no}</option>)}
             </select>
           </div>
-
-          <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-            Proactively identifies at-risk students before university examinations.
-          </div>
-        </div>
+        )}
+      />
+      {studentId ? <Analysis key={studentId} studentId={studentId} /> : roster.loading ? <PageSkeleton /> : (
+        <div className="card"><EmptyState icon={Users} title="No students in this section" /></div>
       )}
+    </>
+  );
+}
 
-      {/* Flagship Output Cards: Probable CGPA + Confidence Gauge + At-Risk Count */}
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
-        gap: '1rem'
-      }}>
-        {/* Predicted SGPA Card */}
-        <div className="stat-card purple animate-pulse-glow" style={{ padding: '1.5rem' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-muted)' }}>PROJECTED SEMESTER SGPA</span>
-            <Zap size={20} color="var(--accent-purple)" />
-          </div>
+function Analysis({ studentId }) {
+  const call = useApi();
+  const c = useChartColors();
+  const [adj, setAdj] = useState({});
+  const [sim, setSim] = useState(null);
+  const [simulating, setSimulating] = useState(false);
+  const debouncedAdj = useDebounced(adj, 220);
+  const reqId = useRef(0);
 
-          <div style={{ fontSize: '2.75rem', fontWeight: 800, color: 'var(--accent-purple)', lineHeight: 1.1, margin: '0.5rem 0' }}>
-            {currentDisplay?.predicted_sgpa}
-          </div>
+  const { data, loading, error, hardReload } = useLoader(async (api) => {
+    const base = await api(`/cgpa/analysis/${studentId}`);
+    // Build real semester history from declared report cards
+    const sid = base?.student_id;
+    const first = sid ? await settle(api(`/exams/report-card/${sid}?semester=1`), null) : null;
+    const current = first?.student?.semester || 0;
+    const sems = (first?.available_semesters || []).filter((s) => s < current);
+    const rest = await Promise.all(sems.filter((s) => s !== 1).map((s) => settle(api(`/exams/report-card/${sid}?semester=${s}`), null)));
+    const cards = [first, ...rest].filter((r) => r && sems.includes(r.selected_semester));
+    const history = cards
+      .map((r) => ({ sem: r.selected_semester, sgpa: r.academic_metrics?.semester_sgpa }))
+      .filter((h) => h.sgpa != null)
+      .sort((a, b) => a.sem - b.sem);
+    return { base, history, currentSem: current, name: first?.student?.name, roll: first?.student?.roll_no };
+  }, [studentId]);
 
-          <div style={{ fontSize: '0.825rem', color: 'var(--text-secondary)' }}>
-            Probable Range: <strong>{currentDisplay?.sgpa_range?.[0]} - {currentDisplay?.sgpa_range?.[1]}</strong> SGPA
-          </div>
-          <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
-            Based on {currentDisplay?.total_semester_credits || 20} semester credits
-          </div>
-        </div>
+  // live what-if
+  useEffect(() => {
+    if (!data) return;
+    if (!Object.keys(debouncedAdj).some((k) => debouncedAdj[k])) { setSim(null); return; }
+    const my = ++reqId.current;
+    setSimulating(true);
+    call('/cgpa/simulate', { method: 'POST', body: { studentId, whatIfAdjustments: debouncedAdj } })
+      .then((r) => { if (my === reqId.current) setSim(r); })
+      .catch(() => {})
+      .finally(() => { if (my === reqId.current) setSimulating(false); });
+  }, [debouncedAdj, data, studentId, call]);
 
-        {/* Cumulative Predicted CGPA Card */}
-        <div className="stat-card info" style={{ padding: '1.5rem' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-muted)' }}>PROJECTED CUMULATIVE CGPA</span>
-            <TrendingUp size={20} color="var(--info)" />
-          </div>
+  const base = data?.base;
+  const view = sim || base;
+  const active = Object.values(adj).filter(Boolean).length;
 
-          <div style={{ fontSize: '2.75rem', fontWeight: 800, color: 'var(--info)', lineHeight: 1.1, margin: '0.5rem 0' }}>
-            {currentDisplay?.predicted_cgpa}
-          </div>
+  const traj = useMemo(() => {
+    if (!data) return [];
+    const rows = data.history.map((h) => ({ label: `Sem ${h.sem}`, actual: h.sgpa }));
+    if (view) {
+      const [lo, hi] = view.sgpa_range || [];
+      rows.push({
+        label: `Sem ${data.currentSem || rows.length + 1}`,
+        forecast: view.predicted_sgpa,
+        err: lo != null && hi != null ? [view.predicted_sgpa - lo, hi - view.predicted_sgpa] : [0, 0],
+      });
+    }
+    return rows;
+  }, [data, view]);
 
-          <div style={{ fontSize: '0.825rem', color: 'var(--text-secondary)' }}>
-            Confidence Band: <strong>{currentDisplay?.cgpa_range?.[0]} - {currentDisplay?.cgpa_range?.[1]}</strong>
-          </div>
-          <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
-            Current CGPA: {currentDisplay?.current_cgpa} • Prior Credits: {currentDisplay?.total_credits_earned || 76}
-          </div>
-        </div>
+  const scatter = useMemo(() => (view?.subjects || []).map((s) => ({
+    x: Math.round(s.difficulty_index * 100), y: s.predicted_score, z: s.credits, name: s.subject_code, full: s.subject_name, risk: s.is_at_risk,
+  })), [view]);
 
-        {/* Statistical Confidence Indicator */}
-        <div className="stat-card success" style={{ padding: '1.5rem' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-muted)' }}>CONFIDENCE SCORE</span>
-            <ShieldCheck size={20} color="var(--success)" />
-          </div>
+  if (loading) return <PageSkeleton />;
+  if (error) return <ErrorState error={error} onRetry={hardReload} />;
+  if (!base) return <div className="card"><EmptyState title="No prediction available" /></div>;
 
-          <div style={{ fontSize: '2.75rem', fontWeight: 800, color: 'var(--success)', lineHeight: 1.1, margin: '0.5rem 0' }}>
-            {currentDisplay?.confidence_score}%
-          </div>
+  const delta = sim ? +(sim.predicted_sgpa - base.predicted_sgpa).toFixed(2) : 0;
+  const deltaC = sim ? +(sim.predicted_cgpa - base.predicted_cgpa).toFixed(2) : 0;
+  const [slo, shi] = view.sgpa_range || [];
+  const [clo, chi] = view.cgpa_range || [];
+  const confTone = view.confidence_score >= 80 ? 'var(--success)' : view.confidence_score >= 65 ? 'var(--warning)' : 'var(--danger)';
+  const subjects = view.subjects || [];
+  const baseBy = Object.fromEntries((base.subjects || []).map((s) => [s.subject_id, s]));
 
-          <div className="progress-bar-container" style={{ height: '8px', margin: '0.4rem 0' }}>
-            <div 
-              className="progress-bar-fill success"
-              style={{ width: `${currentDisplay?.confidence_score}%` }}
-            ></div>
-          </div>
-          <div style={{ fontSize: '0.75rem', color: 'var(--success)', fontWeight: 600 }}>
-            {currentDisplay?.confidence_level} Reliability Model
-          </div>
-        </div>
-
-        {/* Early Warning Flags Count */}
-        <div className={`stat-card ${currentDisplay?.at_risk_count > 0 ? 'danger' : 'success'}`} style={{ padding: '1.5rem' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-muted)' }}>AT-RISK SUBJECT FLAGS</span>
-            <AlertTriangle size={20} color={currentDisplay?.at_risk_count > 0 ? 'var(--danger)' : 'var(--success)'} />
-          </div>
-
-          <div style={{ fontSize: '2.75rem', fontWeight: 800, color: currentDisplay?.at_risk_count > 0 ? 'var(--danger)' : 'var(--success)', lineHeight: 1.1, margin: '0.5rem 0' }}>
-            {currentDisplay?.at_risk_count || 0}
-          </div>
-
-          <div style={{ fontSize: '0.8rem', color: currentDisplay?.at_risk_count > 0 ? 'var(--danger)' : 'var(--success)', fontWeight: 600 }}>
-            {currentDisplay?.at_risk_count > 0 
-              ? 'Early warning triggered' 
-              : 'All subjects safe above target'}
-          </div>
-        </div>
-      </div>
-
-      {/* Visual Recharts Confidence Band Area Chart & Subject Comparison */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))', gap: '1.25rem' }}>
-        {/* Dynamic Confidence Band Chart */}
-        <div className="glass-panel" style={{ padding: '1.5rem' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-            <div>
-              <h3 style={{ fontSize: '1.05rem', fontWeight: 700 }}>CGPA Confidence Band Trajectory</h3>
-              <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                Historical progression + Live simulated forecast interval [Upper, Lower]
-              </p>
+  return (
+    <div className="stack gap-16">
+      {/* Forecast hero */}
+      <section className="hero rise">
+        <div className="row-between wrap" style={{ gap: 24, alignItems: 'stretch' }}>
+          <div style={{ flex: '1 1 380px' }}>
+            <div className="eyebrow">{data.name ? `${data.name} · ${data.roll}` : 'Forecast'} · Semester {data.currentSem || '—'}</div>
+            <div className="row gap-12" style={{ alignItems: 'baseline', marginTop: 14 }}>
+              <span className="serif num" style={{ fontSize: 88, lineHeight: 0.9, color: '#fff' }}>{view.predicted_sgpa?.toFixed(2)}</span>
+              <div>
+                <div style={{ color: 'var(--panel-muted)', fontSize: 13 }}>Projected SGPA</div>
+                {sim && delta !== 0 && <Badge tone={delta > 0 ? 'success' : 'danger'} style={{ marginTop: 4 }}>{delta > 0 ? '+' : ''}{delta} vs. baseline</Badge>}
+              </div>
             </div>
-            <span className="badge badge-purple">Live Interactive</span>
-          </div>
-
-          <div style={{ height: '240px', width: '100%' }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={trajectoryData}>
-                <defs>
-                  <linearGradient id="confidenceGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#8b5cf6" stopOpacity={0.4}/>
-                    <stop offset="95%" stopColor="#8b5cf6" stopOpacity={0.05}/>
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} opacity={0.2} />
-                <XAxis dataKey="semester" tick={{ fill: 'var(--text-secondary)', fontSize: 12 }} />
-                <YAxis domain={[7.5, 10.0]} tick={{ fill: 'var(--text-secondary)', fontSize: 12 }} />
-                <Tooltip formatter={(val) => Number(val).toFixed(2)} />
-                <Area type="monotone" dataKey="upperBand" stroke="#8b5cf6" fillOpacity={1} fill="url(#confidenceGrad)" name="Upper Bound" />
-                <Area type="monotone" dataKey="lowerBand" stroke="#6366f1" fillOpacity={0} name="Lower Bound" />
-                <Line type="monotone" dataKey="projected" stroke="#4f46e5" strokeWidth={3} dot={{ r: 5 }} name="Expected CGPA" />
-                <ReferenceLine y={8.0} stroke="#f59e0b" strokeDasharray="3 3" label={{ value: 'Distinction Bar', fill: '#f59e0b', fontSize: 10 }} />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-
-        {/* Subject Difficulty vs Projected Score Bar Chart */}
-        <div className="glass-panel" style={{ padding: '1.5rem' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-            <div>
-              <h3 style={{ fontSize: '1.05rem', fontWeight: 700 }}>Subject Difficulty vs Projected Marks</h3>
-              <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                Difficulty weighting penalization vs current projected marks out of 100
-              </p>
+            <BandBar lo={slo} hi={shi} value={view.predicted_sgpa} />
+            <div className="row gap-16 wrap small" style={{ color: 'var(--panel-muted)', marginTop: 10 }}>
+              <span>Likely range <b style={{ color: '#fff' }}>{slo?.toFixed?.(2)} – {shi?.toFixed?.(2)}</b></span>
+              <span>{view.total_semester_credits} credits this semester</span>
             </div>
-            <span className="badge badge-info">Courseware Model</span>
           </div>
-
-          <div style={{ height: '240px', width: '100%' }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={subjectCompareData}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} opacity={0.2} />
-                <XAxis dataKey="name" tick={{ fill: 'var(--text-secondary)', fontSize: 12 }} />
-                <YAxis domain={[0, 100]} tick={{ fill: 'var(--text-secondary)', fontSize: 12 }} />
-                <Tooltip />
-                <Legend />
-                <Bar dataKey="projectedScore" fill="#4f46e5" name="Projected Score / 100" radius={[4, 4, 0, 0]} />
-                <Bar dataKey="difficultyPct" fill="#ec4899" name="Difficulty Index %" radius={[4, 4, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
+          <div className="vr desktop-only" style={{ background: 'rgba(255,255,255,0.1)' }} />
+          <div className="row gap-24 wrap" style={{ flex: '1 1 380px', justifyContent: 'space-around' }}>
+            <div>
+              <div className="eyebrow">Projected CGPA</div>
+              <div className="serif num" style={{ fontSize: 48, lineHeight: 1.05, color: '#fff', marginTop: 8 }}>{view.predicted_cgpa?.toFixed(2)}</div>
+              <div className="small" style={{ color: 'var(--panel-muted)' }}>from {view.current_cgpa} · band {clo?.toFixed?.(2)}–{chi?.toFixed?.(2)}</div>
+              {sim && deltaC !== 0 && <div className="xs" style={{ color: deltaC > 0 ? '#4ade80' : '#f87171', marginTop: 4 }}>{deltaC > 0 ? '+' : ''}{deltaC} with your tweaks</div>}
+            </div>
+            <div className="row gap-12">
+              <Ring value={view.confidence_score} size={104} stroke={9} color={confTone} track="rgba(255,255,255,0.1)">
+                <div><div className="serif num" style={{ fontSize: 26, color: '#fff' }}>{view.confidence_score}<span style={{ fontSize: 13 }}>%</span></div></div>
+              </Ring>
+              <div>
+                <div className="eyebrow">Confidence</div>
+                <div style={{ color: '#fff', marginTop: 4 }}>{view.confidence_level} reliability</div>
+                <div className="xs" style={{ color: 'var(--panel-muted)', maxWidth: 140 }}>Narrows as more internal marks are recorded</div>
+              </div>
+            </div>
           </div>
         </div>
-      </div>
+      </section>
 
-      {/* Early Warning Alerts Banner (if any subjects are at risk) */}
-      {currentDisplay?.at_risk_subjects && currentDisplay.at_risk_subjects.length > 0 && (
-        <div style={{
-          padding: '1.25rem 1.5rem',
-          borderRadius: 'var(--radius-lg)',
-          background: 'var(--danger-bg)',
-          border: '1px solid var(--danger-border)',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '0.75rem'
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <AlertTriangle size={20} color="var(--danger)" />
-            <h3 style={{ fontSize: '1rem', color: 'var(--danger)', fontWeight: 700 }}>
-              Proactive Academic Risk Flag (Action Required)
-            </h3>
-          </div>
-
-          <p style={{ fontSize: '0.85rem', color: 'var(--text-primary)' }}>
-            The probability engine has identified subjects with high difficulty indices or low coursework scores that may significantly drag down your semester CGPA:
-          </p>
-
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-            {currentDisplay.at_risk_subjects.map((risk, rIdx) => (
-              <div key={rIdx} style={{
-                padding: '0.65rem 0.85rem',
-                borderRadius: 'var(--radius-md)',
-                background: 'var(--bg-surface)',
-                border: '1px solid var(--border-subtle)',
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center'
-              }}>
-                <div>
-                  <span style={{ fontWeight: 700, color: 'var(--danger)' }}>{risk.subject_code} - {risk.subject_name}</span>
-                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.2rem' }}>
-                    Reason: <em>{risk.reason}</em>
-                  </div>
-                </div>
-                <div style={{ textAlign: 'right' }}>
-                  <span className="badge badge-danger">Projected: Grade {risk.predicted_grade} ({risk.predicted_score}%)</span>
-                </div>
+      {view.at_risk_subjects?.length > 0 && (
+        <Callout tone="danger" title={`${view.at_risk_subjects.length} subject${view.at_risk_subjects.length > 1 ? 's' : ''} flagged by the early-warning model`}>
+          <div className="stack gap-6" style={{ marginTop: 6 }}>
+            {view.at_risk_subjects.map((r) => (
+              <div key={r.subject_code} className="row gap-8 wrap small">
+                <b className="mono">{r.subject_code}</b><span>{r.subject_name}</span>
+                <span className="muted">— {r.reason}</span>
+                <Badge tone="danger">Projected {r.predicted_grade} · {r.predicted_score}</Badge>
               </div>
             ))}
           </div>
-        </div>
+        </Callout>
       )}
 
-      {/* Interactive "What-If" Simulator & Subject Breakdown Matrix */}
-      <div className="glass-panel" style={{ padding: '1.75rem' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '0.75rem' }}>
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <Sliders size={20} color="var(--primary)" />
-              <h3 style={{ fontSize: '1.15rem', fontWeight: 800 }}>Interactive "What-If" Performance Simulator</h3>
-            </div>
-            <p style={{ fontSize: '0.825rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
-              Adjust sliders below to simulate hypothetical mark adjustments in upcoming exams and witness the instant live recalculation of your semester CGPA and confidence band! (Non-persisted calculation).
-            </p>
-          </div>
-
-          {Object.keys(whatIfAdjustments).length > 0 && (
-            <span className="badge badge-warning" style={{ fontSize: '0.8rem' }}>
-              Simulation Active ({Object.keys(whatIfAdjustments).length} adjustments)
-            </span>
-          )}
-        </div>
-
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-          {(currentDisplay?.subjects || []).map(sub => {
-            const currentAdj = whatIfAdjustments[sub.subject_id] || 0;
-            return (
-              <div key={sub.subject_id} style={{
-                padding: '1.25rem',
-                borderRadius: 'var(--radius-md)',
-                background: 'var(--bg-surface-subtle)',
-                border: `1px solid ${sub.is_at_risk ? 'var(--danger-border)' : 'var(--border-subtle)'}`,
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '0.85rem'
-              }}>
-                {/* Header row */}
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
-                  <div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                      <span style={{ fontWeight: 800, fontSize: '0.95rem' }}>{sub.subject_name}</span>
-                      <span className="badge badge-primary">{sub.subject_code}</span>
-                      <span className="badge badge-info">{sub.credits} Credits</span>
-                      {sub.is_at_risk && (
-                        <span className="badge badge-danger">At-Risk Warning</span>
-                      )}
-                    </div>
-                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
-                      Difficulty Index: <strong>{sub.difficulty_index}</strong> (Pass %: {sub.historical_pass_pct}% | Avg: {sub.historical_avg_marks}) • Live Attendance: <strong>{sub.attendance_pct}%</strong>
-                    </div>
-                  </div>
-
-                  {/* Predicted Grade & Score */}
-                  <div style={{ textAlign: 'right' }}>
-                    <div style={{ fontSize: '1.35rem', fontWeight: 800, color: 'var(--primary)' }}>
-                      {sub.predicted_score} <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>/ 100</span>
-                    </div>
-                    <div style={{ fontSize: '0.75rem', fontWeight: 600 }}>
-                      Predicted Grade: <strong style={{ color: 'var(--success)' }}>{sub.predicted_grade}</strong> (Range: {sub.grade_range[0]} - {sub.grade_range[1]})
-                    </div>
-                  </div>
+      <div className="grid-2">
+        <Card title="SGPA trajectory" subtitle="Declared semesters, then this semester’s forecast with its confidence band" icon={TrendingUp}>
+          <ResponsiveContainer width="100%" height={260}>
+            <ComposedChart data={traj} margin={{ top: 16, right: 8, left: -20, bottom: 0 }}>
+              <CartesianGrid vertical={false} stroke={c.line} />
+              <XAxis dataKey="label" {...axisProps(c)} />
+              <YAxis domain={[5, 10]} {...axisProps(c)} />
+              <ReferenceLine y={8} stroke={c.saffron} strokeDasharray="4 4" label={{ value: 'Distinction', position: 'insideTopLeft', fill: c.saffron, fontSize: 11 }} />
+              <Tooltip content={<ChartTip format={(v) => (Array.isArray(v) ? '' : Number(v).toFixed(2))} />} cursor={{ fill: c.sunken }} />
+              <Bar dataKey="actual" name="Declared SGPA" fill={c.lineStrong} radius={[4, 4, 0, 0]} barSize={28} />
+              <Bar dataKey="forecast" name="Forecast SGPA" fill={c.accent} radius={[4, 4, 0, 0]} barSize={28}>
+                <ErrorBar dataKey="err" width={10} strokeWidth={2} stroke={c.ink} direction="y" />
+              </Bar>
+              <Line dataKey="actual" stroke={c.muted} strokeDasharray="3 3" dot={false} legendType="none" name=" " connectNulls />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </Card>
+        <Card title="Difficulty vs. projected marks" subtitle="Each dot is a subject · size = credits · red = at risk" icon={Target}>
+          <ResponsiveContainer width="100%" height={260}>
+            <ScatterChart margin={{ top: 16, right: 12, left: -20, bottom: 0 }}>
+              <CartesianGrid stroke={c.line} />
+              <XAxis type="number" dataKey="x" name="Difficulty" unit="%" domain={[0, 100]} {...axisProps(c)} />
+              <YAxis type="number" dataKey="y" name="Projected" domain={[0, 100]} {...axisProps(c)} />
+              <ZAxis type="number" dataKey="z" range={[50, 220]} />
+              <ReferenceLine y={40} stroke={c.danger} strokeDasharray="4 4" />
+              <Tooltip cursor={{ strokeDasharray: '3 3' }} content={({ active, payload }) => active && payload?.[0] ? (
+                <div className="chart-tip">
+                  <div className="strong">{payload[0].payload.full}</div>
+                  <div className="xs muted mono">{payload[0].payload.name} · {payload[0].payload.z} credits</div>
+                  <div className="small" style={{ marginTop: 4 }}>Difficulty {payload[0].payload.x}% · Projected <b>{payload[0].payload.y}</b></div>
                 </div>
-
-                {/* Slider row */}
-                <div style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '1rem',
-                  padding: '0.5rem 0.75rem',
-                  borderRadius: 'var(--radius-sm)',
-                  background: 'var(--bg-surface)',
-                  border: '1px solid var(--border-subtle)'
-                }}>
-                  <span style={{ fontSize: '0.75rem', fontWeight: 700, minWidth: '130px', color: 'var(--text-secondary)' }}>
-                    Hypothetical Tweak:
-                  </span>
-
-                  <input
-                    type="range"
-                    min="-15"
-                    max="15"
-                    step="1"
-                    value={currentAdj}
-                    onChange={(e) => handleSliderChange(sub.subject_id, e.target.value)}
-                    style={{ flex: 1, accentColor: 'var(--role-accent)', cursor: 'pointer' }}
-                  />
-
-                  <span style={{
-                    fontFamily: 'var(--font-mono)',
-                    fontWeight: 800,
-                    fontSize: '0.85rem',
-                    minWidth: '55px',
-                    textAlign: 'right',
-                    color: currentAdj > 0 ? 'var(--success)' : (currentAdj < 0 ? 'var(--danger)' : 'var(--text-muted)')
-                  }}>
-                    {currentAdj > 0 ? `+${currentAdj}` : currentAdj} pts
-                  </span>
-                </div>
-              </div>
-            );
-          })}
-        </div>
+              ) : null} />
+              <Scatter data={scatter}>
+                {scatter.map((d, i) => <Cell key={i} fill={d.risk ? c.danger : c.accent} fillOpacity={0.75} />)}
+              </Scatter>
+            </ScatterChart>
+          </ResponsiveContainer>
+        </Card>
       </div>
 
-      {/* Model Mathematical Specification Info Box */}
-      <div className="glass-panel" style={{ padding: '1.5rem', background: 'var(--bg-surface-subtle)' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
-          <Info size={18} color="var(--primary)" />
-          <h4 style={{ fontSize: '0.95rem', fontWeight: 700 }}>Model Architecture & Mathematical Grounding</h4>
+      <Card
+        title="What-if simulator"
+        subtitle="Drag a subject to imagine scoring higher or lower in the remaining exams. Nothing is saved."
+        icon={Sliders}
+        actions={<>
+          {simulating && <span className="row gap-6 xs muted"><span className="spinner" style={{ width: 12, height: 12 }} /> Recomputing</span>}
+          {active > 0 && <Badge tone="warning">{active} tweak{active > 1 ? 's' : ''}</Badge>}
+          <button className="btn btn-ghost btn-sm" onClick={() => setAdj({})} disabled={!active}><RotateCcw size={14} /> Reset</button>
+        </>}
+        flush
+      >
+        <div className="table-wrap">
+          <table className="tbl">
+            <thead>
+              <tr>
+                <th>Subject</th>
+                <th className="right">Difficulty</th>
+                <th className="right">Attendance</th>
+                <th className="right">Coursework</th>
+                <th style={{ width: 260 }}>Adjust remaining exams</th>
+                <th className="right">Projected</th>
+                <th className="center">Grade</th>
+              </tr>
+            </thead>
+            <tbody>
+              {subjects.map((s) => {
+                const a = adj[s.subject_id] || 0;
+                const b = baseBy[s.subject_id];
+                const moved = b && b.predicted_score !== s.predicted_score;
+                return (
+                  <tr key={s.subject_id} className={cx(a !== 0 && 'selected')}>
+                    <td>
+                      <div className="row gap-6"><span className="strong">{s.subject_name}</span>{s.is_at_risk && <AlertTriangle size={13} className="t-danger" />}</div>
+                      <div className="xs muted mono">{s.subject_code} · {s.credits} cr</div>
+                    </td>
+                    <td className="right"><DiffPill v={s.difficulty_index} /></td>
+                    <td className={`right mono small t-${s.attendance_pct < 75 ? 'danger' : 'muted'}`}>{pct(s.attendance_pct, 0)}</td>
+                    <td className="right mono small">{s.coursework_score}</td>
+                    <td>
+                      <div className="row gap-10">
+                        <input type="range" min={-15} max={15} step={1} value={a}
+                          onChange={(e) => setAdj((x) => ({ ...x, [s.subject_id]: Number(e.target.value) }))}
+                          aria-label={`Adjust ${s.subject_name}`} />
+                        <span className={`mono xs strong ${a > 0 ? 't-success' : a < 0 ? 't-danger' : 'faint'}`} style={{ width: 34, textAlign: 'right' }}>{a > 0 ? `+${a}` : a}</span>
+                      </div>
+                    </td>
+                    <td className="right">
+                      <span className="mono strong">{s.predicted_score}</span>
+                      {moved && <div className={`xs mono ${s.predicted_score > b.predicted_score ? 't-success' : 't-danger'}`}>{s.predicted_score > b.predicted_score ? '▲' : '▼'} {Math.abs(s.predicted_score - b.predicted_score).toFixed(1)}</div>}
+                    </td>
+                    <td className="center">
+                      <span className={`grade grade-${gradeClass(s.predicted_grade)}`}>{s.predicted_grade}</span>
+                      <div className="xs faint mono" style={{ marginTop: 2 }}>{s.grade_range?.[0]}–{s.grade_range?.[1]}</div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
-        <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
-          The CGPA Probability engine uses a multi-factor regression model:
-          <br />
-          <strong>1. Difficulty Index (D):</strong> Computed as 1.0 - [0.55 * (Avg Marks / 100) + 0.45 * (Pass Rate / 100)], penalizing historically challenging subjects.
-          <br />
-          <strong>2. Continuous Assessment:</strong> Blends internal marks (65%) and assignment performance (35%).
-          <br />
-          <strong>3. Live Smart Attendance Multiplier:</strong> Sourced live from the attendance tracker; awards bonuses for &gt;85% while applying sharp exponential drags when dropping below the statutory 75% threshold.
-        </p>
+      </Card>
+
+      <div className="grid-3">
+        <ModelCard icon={Sigma} title="End-term projection" body={<>The 60-mark external is projected as a weighted blend of coursework ({Math.round((view.model?.weights?.internal_weight ?? 0.45) * 100)}%), attendance ({Math.round((view.model?.weights?.attendance_weight ?? 0.2) * 100)}%) and subject ease, 1 − difficulty ({Math.round((view.model?.weights?.difficulty_weight ?? 0.35) * 100)}%). Admins tune these weights in Governance.</>} />
+        <ModelCard icon={Gauge} title="Continuous assessment" body={<>Your recorded internal (out of 25) and assignment (out of 15) marks count as they are. Subjects without internals yet use the subject’s historical average and get a wider band.</>} />
+        <ModelCard icon={ShieldCheck} title="Attendance rule" body={<>Below the {view.model?.attendance_threshold ?? 75}% eligibility rule the projected external is cut progressively, and the subject is flagged as at risk.</>} />
       </div>
+      <div className="row gap-8 xs faint"><Cpu size={13} /> Engine: {view.engine || 'Weighted model'} <ArrowRight size={12} /> results are probabilistic estimates, not official grades.</div>
     </div>
   );
 }
+
+function BandBar({ lo, hi, value, min = 5, max = 10 }) {
+  if (lo == null || hi == null) return null;
+  const p = (v) => `${((Math.max(min, Math.min(max, v)) - min) / (max - min)) * 100}%`;
+  return (
+    <div style={{ position: 'relative', height: 26, marginTop: 18 }}>
+      <div style={{ position: 'absolute', top: 11, left: 0, right: 0, height: 4, background: 'rgba(255,255,255,0.1)' }} />
+      <div style={{ position: 'absolute', top: 8, height: 10, left: p(lo), width: `calc(${p(hi)} - ${p(lo)})`, background: 'color-mix(in srgb, var(--accent-2) 55%, transparent)', transition: 'all .5s var(--ease)' }} />
+      <div style={{ position: 'absolute', top: 3, width: 3, height: 20, left: p(value), background: '#fff', transform: 'translateX(-1px)', transition: 'left .5s var(--ease)' }} />
+      {[5, 6, 7, 8, 9, 10].map((t) => (
+        <span key={t} className="mono" style={{ position: 'absolute', top: 24, left: p(t), transform: 'translateX(-50%)', fontSize: 10, color: '#71717a' }}>{t}</span>
+      ))}
+    </div>
+  );
+}
+
+function DiffPill({ v }) {
+  const n = Math.round((v || 0) * 100);
+  const tone = n >= 70 ? 'danger' : n >= 55 ? 'warning' : 'success';
+  return <Badge tone={tone}>{n}%</Badge>;
+}
+
+function ModelCard({ icon: Icon, title, body }) {
+  return (
+    <div className="card" style={{ padding: 18 }}>
+      <div className="row gap-10" style={{ marginBottom: 8 }}>
+        <span className="stat-icon" style={{ background: 'var(--accent-soft)', color: 'var(--accent)' }}><Icon size={15} /></span>
+        <span className="strong">{title}</span>
+      </div>
+      <p className="small muted" style={{ lineHeight: 1.6 }}>{body}</p>
+    </div>
+  );
+}
+

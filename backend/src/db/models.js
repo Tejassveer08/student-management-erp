@@ -133,6 +133,7 @@ const AttendanceSession = makeModel('AttendanceSession', 'attendance_sessions', 
   topic_covered: String,
   session_token: { type: String, unique: true, sparse: true },
   qr_expires_at: String,
+  qr_rotate_seconds: { type: Number, default: 30 },
   created_at: { type: Date, default: Date.now }
 });
 
@@ -189,6 +190,7 @@ const AssignmentSubmission = makeModel('AssignmentSubmission', 'assignment_submi
   student_id: { type: Number, required: true, index: true },
   submission_text: String,
   file_url: String,
+  file_name: String,
   submitted_at: { type: Date, default: Date.now },
   marks_obtained: Number,
   faculty_feedback: String,
@@ -226,7 +228,9 @@ const StudentFeePayment = makeModel('StudentFeePayment', 'student_fee_payments',
   amount_due: { type: Number, required: true },
   amount_paid: { type: Number, default: 0 },
   fine_amount: { type: Number, default: 0 },
+  fine_waived: { type: Boolean, default: false },
   status: { type: String, enum: ['Paid', 'Pending', 'Overdue', 'Partial'], default: 'Pending' },
+  payments: { type: [{ amount: Number, method: String, transaction_id: String, receipt_no: String, paid_at: Date, by_user: Number }], default: [] },
   payment_method: String,
   transaction_id: String,
   receipt_no: { type: String, unique: true, sparse: true },
@@ -240,6 +244,7 @@ const Notice = makeModel('Notice', 'notices', {
   target_audience: { type: String, enum: ['All', 'Students', 'Faculty', 'Parents'], default: 'All' },
   department_id: { type: Number, default: null },
   posted_by: { type: String, required: true },
+  author_user_id: { type: Number, default: null },
   is_pinned: { type: Number, default: 0 },
   created_at: { type: Date, default: Date.now }
 });
@@ -322,7 +327,8 @@ const StudyPlan = makeModel('StudyPlan', 'study_plans', {
   subject_id: { type: Number, required: true },
   priority: { type: String, enum: ['Critical', 'High', 'Moderate', 'Review'], default: 'Moderate' },
   recommended_weekly_hours: { type: Number, default: 4.0 },
-  completed_hours_this_week: { type: Number, default: 1.5 },
+  completed_hours_this_week: { type: Number, default: 0 },
+  week_start: { type: String, default: null },
   weak_topics: String,
   notes: String
 }, {
@@ -333,7 +339,7 @@ const Notification = makeModel('Notification', 'notifications', {
   user_id: { type: Number, required: true, index: true },
   title: { type: String, required: true },
   message: { type: String, required: true },
-  type: { type: String, enum: ['attendance_alert', 'cgpa_warning', 'exam_result', 'fee_reminder', 'assignment_due', 'general'], default: 'general' },
+  type: { type: String, enum: ['attendance_alert', 'cgpa_warning', 'exam_result', 'fee_reminder', 'assignment_due', 'society', 'forum', 'placement', 'general'], default: 'general' },
   link_url: String,
   is_read: { type: Number, default: 0 },
   created_at: { type: Date, default: Date.now }

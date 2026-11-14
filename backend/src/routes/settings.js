@@ -1,6 +1,33 @@
 const express = require('express');
 const { InstitutionSetting, AuditLog, User } = require('../db/database');
 const { verifyToken, requirePermission, logAudit } = require('../middleware/authMiddleware');
+const { invalidatePolicy, normaliseScale } = require('../services/policy');
+const { invalidatePredictions } = require('../services/predictions');
+const { invalidateMerit } = require('../services/merit');
+const { regradeAllMarks, recomputeCgpa } = require('../services/academicRecord');
+
+/** Validate a policy value before it is stored; returns an error string or null */
+function validateSetting(key, value) {
+  const num = Number(value);
+  const parse = () => (typeof value === 'object' ? value : JSON.parse(value));
+  try {
+    if (key === 'attendance_threshold' && !(num >= 50 && num <= 100)) return 'Attendance threshold must be between 50 and 100';
+    if (key === 'late_fee_per_day' && !(num >= 0 && num <= 10000)) return 'Late fee must be between 0 and 10,000';
+    if (key === 'cgpa_probability_weights') {
+      const w = parse();
+      const vals = ['internal_weight', 'difficulty_weight', 'attendance_weight'].map((k) => Number(w[k]));
+      if (vals.some((v) => !(v >= 0 && v <= 1))) return 'Each weight must be between 0 and 1';
+      if (Math.abs(vals.reduce((a, b) => a + b, 0) - 1) > 0.011) return 'Model weights must add up to 1.0';
+    }
+    if (key === 'grading_scale') {
+      const list = normaliseScale(parse());
+      if (list.length < 2 || list[list.length - 1].min !== 0) return 'The grading scale needs at least two bands and one starting at 0';
+    }
+  } catch {
+    return 'Value is not valid JSON';
+  }
+  return null;
+}
 
 const router = express.Router();
 
@@ -56,6 +83,8 @@ router.put('/:key', verifyToken, requirePermission('settings', 'update'), async 
     return res.status(404).json({ error: `Setting with key "${key}" not found` });
   }
 
+  const problem = validateSetting(key, value);
+  if (problem) return res.status(400).json({ error: problem });
   const stringVal = typeof value === 'object' ? JSON.stringify(value) : String(value);
   await InstitutionSetting.updateOne(
     { setting_key: key },
@@ -75,7 +104,17 @@ router.put('/:key', verifyToken, requirePermission('settings', 'update'), async 
     ipAddress: req.ip
   });
 
-  res.json({ message: `Setting "${key}" updated successfully.`, key, value });
+  // Make the new policy live everywhere
+  invalidatePolicy();
+  invalidatePredictions();
+  invalidateMerit();
+  let effect = '';
+  if (key === 'grading_scale') {
+    const regraded = await regradeAllMarks();
+    const cgpas = await recomputeCgpa();
+    effect = ` ${regraded} marks re-graded and ${cgpas} CGPAs recalculated.`;
+  }
+  res.json({ message: `Setting "${key}" updated.${effect}`, key, value });
 });
 
 // GET /api/settings/audit-logs
@@ -86,7 +125,7 @@ router.get('/audit-logs', verifyToken, requirePermission('audit_logs', 'read'), 
 
   const [logs, total] = await Promise.all([
     AuditLog.find(filter).sort({ created_at: -1, id: -1 }).skip(Number(offset)).limit(Number(limit)).lean(),
-    AuditLog.countDocuments()
+    AuditLog.countDocuments(filter)
   ]);
 
   const formattedLogs = logs.map(l => ({
