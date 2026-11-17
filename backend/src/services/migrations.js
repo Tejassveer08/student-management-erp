@@ -9,7 +9,7 @@ const { regradeAllMarks, recomputeCgpa } = require('./academicRecord');
 const { recomputeMerit } = require('./merit');
 const { refreshFees } = require('./feeLedger');
 const { rehomeAttendance } = require('./attendanceRehome');
-const { syncAttendanceAlerts, scheduleDailyAlerts } = require('./attendanceAlerts');
+const { syncAttendanceAlerts } = require('./attendanceAlerts');
 const { refreshCalibration } = require('./calibration');
 
 async function once(name, fn) {
@@ -75,10 +75,10 @@ async function runMigrations() {
   // Re-fit the CGPA engine against the institution's declared results
   const cal = await refreshCalibration();
   console.log(`[migrate] CGPA engine calibrated on ${cal.n} declared results: a=${cal.a} b=${cal.b} k=${cal.k}`);
-  // Attendance alerts must match the data: raise true ones, retire stale ones; then repeat daily
+  // Attendance alerts must match the data: raise true ones, retire stale ones
+  // (repeated daily by server.js's timer, or by the Vercel cron in production)
   const alerts = await syncAttendanceAlerts();
   if (alerts.resolved || alerts.raised) console.log(`[migrate] attendance alerts: ${alerts.raised} raised, ${alerts.resolved} stale alerts resolved`);
-  scheduleDailyAlerts();
   await recomputeMerit();
 }
 

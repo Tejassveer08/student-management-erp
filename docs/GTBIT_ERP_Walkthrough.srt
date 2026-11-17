@@ -1,0 +1,472 @@
+1
+00:00:00,150 --> 00:00:06,041
+Welcome to a walkthrough of the GTBIT Student Management ERP, our minor
+
+2
+00:00:06,091 --> 00:00:10,476
+project at Guru Tegh Bahadur Institute of Technology.
+
+3
+00:00:10,526 --> 00:00:16,501
+It is one web application that runs the academic and administrative life
+
+4
+00:00:16,551 --> 00:00:23,698
+of the college, for four kinds of user: administrators, faculty, students and parents.
+
+5
+00:00:23,748 --> 00:00:27,882
+In the next ten minutes we will sign in as each of
+
+6
+00:00:27,932 --> 00:00:36,752
+them, and look at every major module, from attendance and examinations to fees, placements and governance.
+
+7
+00:00:37,400 --> 00:00:39,355
+Here is how it is built.
+
+8
+00:00:39,405 --> 00:00:45,789
+A React 19 single page application talks to an Express 5 REST API on Node.js.
+
+9
+00:00:45,839 --> 00:00:51,972
+Every request carries a signed token, is checked against a role permission
+
+10
+00:00:52,022 --> 00:00:58,156
+matrix, and then passes through one record level scoping rule, so students
+
+11
+00:00:58,206 --> 00:01:05,509
+see only themselves, parents only their wards, and faculty only the sections they teach.
+
+12
+00:01:05,559 --> 00:01:11,692
+Data lives in MongoDB Atlas, in thirty seven collections, seeded with nine
+
+13
+00:01:11,742 --> 00:01:20,716
+hundred and five students, twenty faculty, and more than twenty seven thousand attendance records and marks.
+
+14
+00:01:20,766 --> 00:01:28,069
+A Python worker runs the CGPA forecasting engine, with an identical JavaScript fallback.
+
+15
+00:01:28,720 --> 00:01:31,676
+Everyone signs in on the same page.
+
+16
+00:01:31,726 --> 00:01:36,830
+You can use an email, a roll number, an enrolment number, or
+
+17
+00:01:36,880 --> 00:01:42,586
+a faculty employee ID, and the form recognises which one you typed.
+
+18
+00:01:42,636 --> 00:01:48,685
+Failed attempts are rate limited, and there are no back-door endpoints.
+
+19
+00:01:48,735 --> 00:01:51,691
+Let's sign in as the administrator.
+
+20
+00:01:52,340 --> 00:01:58,890
+The administrator's dashboard leads with one plain statement: nine hundred and five
+
+21
+00:01:58,940 --> 00:02:05,172
+students are enrolled, and those under the seventy five percent attendance rule
+
+22
+00:02:05,222 --> 00:02:07,478
+are counted right next to it.
+
+23
+00:02:07,528 --> 00:02:13,681
+Below are campus attendance, fee recovery, and the early warning cohort, which
+
+24
+00:02:13,731 --> 00:02:18,770
+lists the students most at risk, with predicted risk by section.
+
+25
+00:02:18,820 --> 00:02:22,825
+Every module is one tap away in the dock, or in the
+
+26
+00:02:22,875 --> 00:02:29,664
+full screen menu, and the command palette, opened with Ctrl+K, jumps anywhere by name.
+
+27
+00:02:30,310 --> 00:02:37,582
+The student directory filters all nine hundred and five students by semester and section.
+
+28
+00:02:37,632 --> 00:02:44,658
+Opening a student shows their dossier: identity, guardian, and an attendance snapshot.
+
+29
+00:02:44,708 --> 00:02:46,304
+Admissions are real.
+
+30
+00:02:46,354 --> 00:02:52,885
+Admitting a student creates their login with a unique temporary password, raises
+
+31
+00:02:52,935 --> 00:02:58,562
+the semester's fee invoice, and can create a linked guardian account.
+
+32
+00:02:58,612 --> 00:03:02,347
+A whole batch can be imported from a CSV file.
+
+33
+00:03:03,000 --> 00:03:09,451
+In examinations, the marksheet shows each semester's grades and SGPA on the
+
+34
+00:03:09,501 --> 00:03:12,225
+official GGSIPU ten point scale.
+
+35
+00:03:12,275 --> 00:03:16,645
+The exam calendar shows which results are declared.
+
+36
+00:03:16,695 --> 00:03:22,539
+Faculty can enter marks only for the sections they teach, within the
+
+37
+00:03:22,589 --> 00:03:26,093
+limits of twenty five, fifteen and sixty.
+
+38
+00:03:26,143 --> 00:03:33,287
+Publishing an end term result recomputes every affected CGPA, notifies students and
+
+39
+00:03:33,337 --> 00:03:37,708
+guardians, and recalibrates the forecasting engine.
+
+40
+00:03:38,360 --> 00:03:44,687
+The fee ledger shows demand, collections and overdue amounts for every programme.
+
+41
+00:03:44,737 --> 00:03:49,725
+Invoices turn overdue after the due date and accrue a late fine,
+
+42
+00:03:49,775 --> 00:03:53,819
+capped at twenty percent, unless accounts waives it.
+
+43
+00:03:53,869 --> 00:03:59,408
+Part payments are accepted, every payment is logged with its method and
+
+44
+00:03:59,458 --> 00:04:03,266
+reference, and receipts are numbered in sequence.
+
+45
+00:04:03,920 --> 00:04:08,170
+Placements show statistics computed from real offers.
+
+46
+00:04:08,220 --> 00:04:13,199
+Each drive has a minimum CGPA and a deadline that are enforced
+
+47
+00:04:13,249 --> 00:04:20,906
+when students apply, and the placement office moves applicants through shortlisting, interviews
+
+48
+00:04:20,956 --> 00:04:24,394
+and selection, notifying them at each step.
+
+49
+00:04:24,444 --> 00:04:29,911
+The library enforces stock, a four book limit and overdue fines, and
+
+50
+00:04:29,961 --> 00:04:33,967
+hostel allocation keeps room occupancy consistent.
+
+51
+00:04:34,620 --> 00:04:37,814
+Governance is where policy lives as data.
+
+52
+00:04:37,864 --> 00:04:43,986
+The attendance threshold, the grading scale, the late fee, and the forecasting
+
+53
+00:04:44,036 --> 00:04:47,863
+model's weights and calibration are all settings.
+
+54
+00:04:47,913 --> 00:04:54,193
+Every change is validated, applied across the system within seconds, and written
+
+55
+00:04:54,243 --> 00:04:57,912
+to the audit trail with its old and new values.
+
+56
+00:04:58,560 --> 00:05:00,334
+Now the faculty portal.
+
+57
+00:05:00,384 --> 00:05:06,204
+A teacher's dashboard shows today's lectures and the students in their own
+
+58
+00:05:06,254 --> 00:05:09,694
+sections who are under seventy five percent.
+
+59
+00:05:09,744 --> 00:05:12,946
+The flagship feature is smart attendance.
+
+60
+00:05:12,996 --> 00:05:18,736
+The teacher picks a mapped class and opens a fifteen minute QR roll call.
+
+61
+00:05:18,786 --> 00:05:22,781
+The code under the QR changes every thirty seconds.
+
+62
+00:05:22,831 --> 00:05:27,699
+It is derived from a secret session token and the current time
+
+63
+00:05:27,749 --> 00:05:33,886
+window, so a photo forwarded to a group chat stops working almost immediately.
+
+64
+00:05:34,540 --> 00:05:41,264
+On the student's phone, scanning the QR opens the portal straight at the check in screen.
+
+65
+00:05:41,314 --> 00:05:45,298
+Here we type the code shown on the projector instead.
+
+66
+00:05:45,348 --> 00:05:50,626
+The server accepts the current or the previous window, checks that the
+
+67
+00:05:50,676 --> 00:05:54,888
+student belongs to this section, and marks them present.
+
+68
+00:05:54,938 --> 00:06:00,521
+Back on the teacher's screen, the roster updates live, showing the student
+
+69
+00:06:00,571 --> 00:06:02,043
+as checked in by QR.
+
+70
+00:06:02,093 --> 00:06:05,544
+Closing the roll call stops further check ins.
+
+71
+00:06:06,190 --> 00:06:09,354
+Let's sign in as a student, Tejassveer.
+
+72
+00:06:09,404 --> 00:06:15,536
+His dashboard opens with his attendance in plain words: eighty six percent,
+
+73
+00:06:15,586 --> 00:06:20,563
+exam eligible, but one subject is under seventy five percent.
+
+74
+00:06:20,613 --> 00:06:26,415
+The attendance ledger shows every subject against the rule, and for any
+
+75
+00:06:26,465 --> 00:06:32,266
+shortfall it says exactly how many consecutive classes will recover it.
+
+76
+00:06:32,316 --> 00:06:38,283
+The same message arrives as an alert, for the student and their guardian.
+
+77
+00:06:38,930 --> 00:06:41,927
+This is the CGPA probability module.
+
+78
+00:06:41,977 --> 00:06:48,698
+Before results are declared, it forecasts this semester's SGPA and the resulting
+
+79
+00:06:48,748 --> 00:06:52,845
+CGPA, with a likely range and a confidence level.
+
+80
+00:06:52,895 --> 00:06:58,516
+For Tejassveer it predicts an SGPA of eight point eight three, with
+
+81
+00:06:58,566 --> 00:07:04,187
+high confidence, and flags Software Engineering for low attendance.
+
+82
+00:07:04,237 --> 00:07:13,243
+Each subject's final mark is projected from internal marks, assignments, attendance and subject difficulty.
+
+83
+00:07:13,293 --> 00:07:18,152
+In the what if simulator, he can drag a subject higher and
+
+84
+00:07:18,202 --> 00:07:21,199
+watch the forecast change instantly.
+
+85
+00:07:21,249 --> 00:07:22,638
+Nothing is saved.
+
+86
+00:07:23,290 --> 00:07:25,478
+Coursework is fully working.
+
+87
+00:07:25,528 --> 00:07:31,794
+Students upload their submissions as real files, faculty grade them against the
+
+88
+00:07:31,844 --> 00:07:36,271
+maximum marks, and lecture notes are shared per subject.
+
+89
+00:07:36,321 --> 00:07:42,826
+The study planner suggests weekly hours for each subject from attendance, internal
+
+90
+00:07:42,876 --> 00:07:45,944
+marks and difficulty, and explains why.
+
+91
+00:07:45,994 --> 00:07:49,461
+The career guide builds on declared results.
+
+92
+00:07:50,110 --> 00:07:52,703
+Compare an at risk student, Aman.
+
+93
+00:07:52,753 --> 00:07:59,831
+His dashboard warns that he is under the seventy five percent rule and could be detained.
+
+94
+00:07:59,881 --> 00:08:06,158
+His forecast has moderate confidence, a wider range, and three subjects flagged
+
+95
+00:08:06,208 --> 00:08:10,483
+for low attendance, each with a reason in plain words.
+
+96
+00:08:10,533 --> 00:08:16,650
+This is exactly the early, explained warning the system was designed to give.
+
+97
+00:08:17,300 --> 00:08:20,179
+Parents see only their linked wards.
+
+98
+00:08:20,229 --> 00:08:26,931
+The parent portal shows the ward's attendance, latest marks, notices for guardians,
+
+99
+00:08:26,981 --> 00:08:32,463
+and fees with the full payment history, so families no longer depend
+
+100
+00:08:32,513 --> 00:08:35,554
+on the student to pass information on.
+
+101
+00:08:36,200 --> 00:08:38,079
+How good is the forecast?
+
+102
+00:08:38,129 --> 00:08:42,786
+We back tested it on seven hundred and forty one students and
+
+103
+00:08:42,836 --> 00:08:50,271
+three thousand seven hundred and five declared subject results, cross validated across semesters.
+
+104
+00:08:50,321 --> 00:08:55,209
+At first the engine was about six marks too pessimistic, and its
+
+105
+00:08:55,259 --> 00:08:59,993
+bands caught the real mark only forty one percent of the time.
+
+106
+00:09:00,043 --> 00:09:05,317
+So we made it calibrate itself on the college's own declared results,
+
+107
+00:09:05,367 --> 00:09:10,796
+with a least squares fit and a band chosen for eighty percent coverage.
+
+108
+00:09:10,846 --> 00:09:15,502
+Out of sample, the average error fell from eight point one to
+
+109
+00:09:15,552 --> 00:09:20,364
+six point four marks, eighty one percent of real marks now fall
+
+110
+00:09:20,414 --> 00:09:25,765
+inside the band, and higher confidence really does mean smaller error.
+
+111
+00:09:26,420 --> 00:09:30,814
+Every screen also works in a dark theme, and on a phone,
+
+112
+00:09:30,864 --> 00:09:36,449
+where the navigation dock and every module adapt to the smaller screen.
+
+113
+00:09:37,100 --> 00:09:42,403
+To sum up: one secure system for the whole college, record level
+
+114
+00:09:42,453 --> 00:09:49,344
+access control enforced on every endpoint, rotating QR attendance with live rosters
+
+115
+00:09:49,394 --> 00:09:54,948
+and recovery alerts, and an honest, self calibrating CGPA forecast.
+
+116
+00:09:54,998 --> 00:10:00,467
+All twenty eight role boundary tests pass, and the whole cohort is
+
+117
+00:10:00,517 --> 00:10:03,645
+scored in about a quarter of a second.
+
+118
+00:10:03,695 --> 00:10:05,569
+Thank you for watching.
+

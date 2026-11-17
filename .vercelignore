@@ -1,0 +1,8 @@
+# Not needed on Vercel (keeps uploads small and secrets local)
+docs/
+**/node_modules
+backend/uploads
+backend/.env
+**/.env
+**/.env.local
+.claude/

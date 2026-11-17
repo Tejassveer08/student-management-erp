@@ -1,6 +1,23 @@
 const path = require('path');
+const dns = require('dns');
 require('dotenv').config({ path: path.join(__dirname, '../../.env') });
 const mongoose = require('mongoose');
+
+// mongodb+srv:// needs a DNS SRV lookup. On some Windows setups Node picks up
+// only a loopback resolver (127.0.0.1) that refuses queries, which surfaces as
+// "querySrv ECONNREFUSED". Fall back to public resolvers in that case.
+// Override with DNS_SERVERS=8.8.8.8,1.1.1.1 in .env if needed.
+function ensureUsableDns(uri) {
+  if (!uri.startsWith('mongodb+srv://')) return;
+  const configured = (process.env.DNS_SERVERS || '').split(',').map((s) => s.trim()).filter(Boolean);
+  const current = dns.getServers();
+  const onlyLoopback = current.length === 0 || current.every((s) => s === '127.0.0.1' || s === '::1');
+  if (configured.length || onlyLoopback) {
+    const servers = configured.length ? configured : ['8.8.8.8', '1.1.1.1'];
+    dns.setServers(servers);
+    console.log(`Using DNS servers ${servers.join(', ')} for MongoDB SRV lookup.`);
+  }
+}
 const models = require('./models');
 const { GTBIT_SOCIETIES } = require('./societiesData');
 
@@ -14,6 +31,8 @@ async function connectDB() {
   if (uri.includes('<username>') || uri.includes('<password>') || uri.includes('<cluster>')) {
     console.warn('⚠️  MONGO_URI still contains placeholder credentials. Set your real MongoDB Atlas URI in backend/.env.');
   }
+
+  ensureUsableDns(uri);
 
   connectPromise = mongoose.connect(uri, {
     serverSelectionTimeoutMS: 8000

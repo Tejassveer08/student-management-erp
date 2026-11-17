@@ -23,7 +23,7 @@ export async function api(path, { token, method = 'GET', body, signal, raw = fal
     res = await fetch(url, { method, headers, body: payload, signal });
   } catch (err) {
     if (err.name === 'AbortError') throw err;
-    throw new Error('Cannot reach the ERP server. Make sure the backend is running on port 5000.');
+    throw new Error('Cannot reach the ERP server. Check your connection and try again.');
   }
   if (raw) return res;
 
@@ -34,7 +34,7 @@ export async function api(path, { token, method = 'GET', body, signal, raw = fal
   }
   if (!res.ok) {
     const msg = (data && typeof data === 'object' && (data.error || data.message)) ||
-      (res.status === 502 || res.status === 504 ? 'Backend server is not reachable (port 5000).' : `Request failed (${res.status})`);
+      (res.status === 502 || res.status === 504 ? 'The ERP server is not reachable right now.' : `Request failed (${res.status})`);
     const e = new Error(msg);
     e.status = res.status;
     e.data = data;

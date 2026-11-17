@@ -190,6 +190,8 @@ function calculateCGPAPredictionJS(payload) {
 /* ------------------------------------------------------------------ */
 /* Persistent Python worker                                            */
 /* ------------------------------------------------------------------ */
+// Serverless hosts (Vercel) have no Python runtime: use the identical JS model there.
+const JS_ONLY = process.env.CGPA_ENGINE === 'js' || Boolean(process.env.VERCEL);
 const SCRIPT = path.resolve(__dirname, '../../python_service/cgpa_engine.py');
 let worker = null;
 let workerReady = false;
@@ -260,7 +262,7 @@ function pythonBatch(payloads, timeoutMs = 8000) {
 /** Score many students. Uses the Python worker when it is up, the JS model otherwise. */
 async function predictBatch(payloads) {
   if (!payloads.length) return [];
-  if (process.env.CGPA_ENGINE !== 'js') {
+  if (!JS_ONLY) {
     startWorker();
     if (workerReady) {
       try {
@@ -284,11 +286,11 @@ async function predictCGPAWithPythonOrFallback(payload) {
 }
 
 function engineStatus() {
-  return { python_worker: workerReady ? 'running' : worker ? 'starting' : 'stopped', mode: process.env.CGPA_ENGINE === 'js' ? 'js-only' : 'auto' };
+  return { python_worker: workerReady ? 'running' : worker ? 'starting' : 'stopped', mode: JS_ONLY ? 'js-only' : 'auto' };
 }
 
 // Warm the worker up at boot so the first request is fast
-if (process.env.CGPA_ENGINE !== 'js') setTimeout(startWorker, 0);
+if (!JS_ONLY) setTimeout(startWorker, 0);
 process.on('exit', () => stopWorker());
 
 /** Kept for callers that grade raw marks without a policy in hand */
